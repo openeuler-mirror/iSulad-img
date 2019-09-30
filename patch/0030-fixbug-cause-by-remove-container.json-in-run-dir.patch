@@ -1,0 +1,215 @@
+From 308f329b3862b901c9529c2bde68d8130721e641 Mon Sep 17 00:00:00 2001
+From: LiuHao <liuhao27@huawei.com>
+Date: Fri, 9 Aug 2019 17:07:33 +0800
+Subject: [PATCH 30/30] fixbug: cause by remove container.json in run dir
+
+Start container will load container.json in run dir.
+If it is not exist, start container will failed.
+
+Signed-off-by: LiuHao <liuhao27@huawei.com>
+---
+ .../containers/storage/containers.go          | 26 ++++++++-
+ vendor/github.com/containers/storage/store.go | 54 ++++++++++++++-----
+ 2 files changed, 65 insertions(+), 15 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/containers.go b/vendor/github.com/containers/storage/containers.go
+index cd9353e..72bd0cb 100644
+--- a/vendor/github.com/containers/storage/containers.go
++++ b/vendor/github.com/containers/storage/containers.go
+@@ -8,11 +8,11 @@ import (
+ 	"path/filepath"
+ 	"time"
+ 
++	"github.com/containers/storage/pkg/filelocker"
+ 	"github.com/containers/storage/pkg/idtools"
+ 	"github.com/containers/storage/pkg/ioutils"
+ 	"github.com/containers/storage/pkg/stringid"
+ 	"github.com/containers/storage/pkg/truncindex"
+-	"github.com/containers/storage/pkg/filelocker"
+ 	digest "github.com/opencontainers/go-digest"
+ 	"github.com/pkg/errors"
+ )
+@@ -243,6 +243,30 @@ func (r *containerStore) Save() error {
+ 	return ioutils.AtomicWriteFile(rpath, jdata, 0600)
+ }
+ 
++func newContainerStoreWithoutData(dir string) (ContainerStore, error) {
++	var err error
++	var lockfile filelocker.Locker
++
++	if err := os.MkdirAll(dir, 0700); err != nil {
++		return nil, err
++	}
++	lockfile, err = filelocker.GetLockfile(filepath.Join(dir, "containers.lock"))
++	if err != nil {
++		return nil, err
++	}
++
++	cstore := containerStore{
++		lockfile:   lockfile,
++		dir:        dir,
++		containers: []*Container{},
++		byid:       make(map[string]*Container),
++		bylayer:    make(map[string]*Container),
++		byname:     make(map[string]*Container),
++	}
++
++	return &cstore, nil
++}
++
+ func newContainerStore(readonly bool, dir string) (ContainerStore, error) {
+ 	var err error
+ 	var lockfile, rolockfile filelocker.Locker
+diff --git a/vendor/github.com/containers/storage/store.go b/vendor/github.com/containers/storage/store.go
+index da36720..522920c 100644
+--- a/vendor/github.com/containers/storage/store.go
++++ b/vendor/github.com/containers/storage/store.go
+@@ -1,6 +1,7 @@
+ package storage
+ 
+ import (
++	"crypto/sha256"
+ 	"encoding/base64"
+ 	"encoding/json"
+ 	"fmt"
+@@ -12,18 +13,17 @@ import (
+ 	"strings"
+ 	"sync"
+ 	"time"
+-	"crypto/sha256"
+ 
+ 	// register all of the built-in drivers
+-	_ "github.com/containers/storage/drivers/register"
+ 	"github.com/BurntSushi/toml"
+ 	drivers "github.com/containers/storage/drivers"
++	_ "github.com/containers/storage/drivers/register"
+ 	"github.com/containers/storage/pkg/archive"
+ 	"github.com/containers/storage/pkg/directory"
++	"github.com/containers/storage/pkg/filelocker"
+ 	"github.com/containers/storage/pkg/idtools"
+ 	"github.com/containers/storage/pkg/ioutils"
+ 	"github.com/containers/storage/pkg/parsers"
+-	"github.com/containers/storage/pkg/filelocker"
+ 	"github.com/containers/storage/pkg/stringid"
+ 	"github.com/containers/storage/pkg/stringutils"
+ 	digest "github.com/opencontainers/go-digest"
+@@ -146,9 +146,9 @@ type StoreOptions struct {
+ 	GraphDriverOptions []string `json:"driver-options,omitempty"`
+ 	// UIDMap and GIDMap are used for setting up a container's root filesystem
+ 	// for use inside of a user namespace where UID mapping is being used.
+-	UIDMap []idtools.IDMap `json:"uidmap,omitempty"`
+-	GIDMap []idtools.IDMap `json:"gidmap,omitempty"`
+-	ReadOnly bool
++	UIDMap        []idtools.IDMap `json:"uidmap,omitempty"`
++	GIDMap        []idtools.IDMap `json:"gidmap,omitempty"`
++	ReadOnly      bool
+ 	DonotLoadData bool
+ }
+ 
+@@ -623,7 +623,7 @@ func GetStore(options StoreOptions) (Store, error) {
+ 	}
+ 	/* do not load data */
+ 	if options.DonotLoadData {
+-		err = s.loadWithData()
++		err = s.loadWithoutData()
+ 		if err != nil {
+ 			return nil, err
+ 		}
+@@ -721,7 +721,7 @@ func (s *store) loadWithROLock() error {
+ 	return nil
+ }
+ 
+-func (s *store) loadWithData() error {
++func (s *store) loadWithoutData() error {
+ 	driver, err := s.getGraphDriver()
+ 	if err != nil {
+ 		return err
+@@ -730,14 +730,26 @@ func (s *store) loadWithData() error {
+ 	s.graphDriverName = driver.String()
+ 	driverPrefix := s.graphDriverName + "-"
+ 
+-	rlpath := filepath.Join(s.runRoot, driverPrefix + "layers")
+-	glpath := filepath.Join(s.graphRoot, driverPrefix + "layers")
++	rlpath := filepath.Join(s.runRoot, driverPrefix+"layers")
++	glpath := filepath.Join(s.graphRoot, driverPrefix+"layers")
+ 
+ 	rls, err := newLayerStoreWithoutData(rlpath, glpath, driver, s.uidMap, s.gidMap)
+ 	if err != nil {
+ 		return err
+ 	}
+ 	s.layerStore = rls
++
++	gcpath := filepath.Join(s.graphRoot, driverPrefix+"containers")
++	rcpath := filepath.Join(s.runRoot, driverPrefix+"containers")
++	if err := os.MkdirAll(rcpath, 0700); err != nil {
++		return err
++	}
++	rcs, err := newContainerStoreWithoutData(gcpath)
++	if err != nil {
++		return err
++	}
++	s.containerStore = rcs
++
+ 	return nil
+ }
+ 
+@@ -824,6 +836,7 @@ func (s *store) LayerROStore() (LayerStore, error) {
+ 
+ 	return s.layerStoreHelper(true)
+ }
++
+ // LayerStore obtains and returns a handle to the writeable layer store object
+ // used by the Store.  Accessing this store directly will bypass locking and
+ // synchronization, so it is not a part of the exported Store interface.
+@@ -1481,7 +1494,6 @@ func (s *store) SetLoadedTime(id string, loaded time.Time) error {
+ 	return ErrNotAnID
+ }
+ 
+-
+ func (s *store) AddName(id string, name string) error {
+ 	ristore, err := s.ImageStore()
+ 	if err != nil {
+@@ -2152,7 +2164,7 @@ func (s *store) CleanupCheckedLayers() {
+ 	s.checkedLayers = make(map[string]bool)
+ }
+ 
+-func (s *store) GetCheckedLayers()  {
++func (s *store) GetCheckedLayers() {
+ 	checkedLayers := make(map[string]bool)
+ 	defer func() {
+ 		s.checkedLayers = checkedLayers
+@@ -2229,7 +2241,7 @@ func (s *store) DeleteContainersByImage(id string) error {
+ 	}
+ 
+ 	for _, container := range containers {
+-		if (container.ImageID == id) {
++		if container.ImageID == id {
+ 			containerID := container.ID
+ 			if rcstore.Exists(containerID) {
+ 				if container, err := rcstore.Get(containerID); err == nil {
+@@ -2719,7 +2731,21 @@ func (s *store) Mount(id, mountLabel string) (string, error) {
+ 	)
+ 	container, err := s.LoadContainerRunJson(id)
+ 	if err != nil {
+-		return "", err
++		rcstore, err := s.ContainerStore()
++		if err != nil {
++			return "", err
++		}
++		rcstore.Lock()
++		if modified, err := rcstore.Modified(); modified || err != nil {
++			rcstore.Load()
++		}
++		container, err = rcstore.Get(id)
++		if err != nil {
++			rcstore.Unlock()
++			return "", err
++		}
++		s.SaveContainerRunJson(container)
++		rcstore.Unlock()
+ 	}
+ 	metadata := RuntimeContainerMetadata{}
+ 	if err = json.Unmarshal([]byte(container.Metadata), &metadata); err != nil {
+-- 
+2.22.0
+

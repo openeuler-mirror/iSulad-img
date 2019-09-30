@@ -1,0 +1,344 @@
+From d895971ccf06744197c02d9ade5503532d5b3019 Mon Sep 17 00:00:00 2001
+From: TanYiFeng <tanyifeng1@huawei.com>
+Date: Mon, 20 May 2019 10:05:08 -0400
+Subject: [PATCH 17/30] isulad-kit-vendor: fix bug of concurrent run with quota
+
+reason: setProjectQuota using common mutex to avoid set the same
+project id for diffrent containers, this may also get the same
+project id if we call isulad-kit concurrent which means isulad-kit
+is called by diffrent process, we should use filelock instead.
+
+Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
+---
+ .../containers/storage/containers.go          | 15 +++++----
+ .../storage/drivers/quota/projectquota.go     | 33 ++++++++++++++-----
+ .../github.com/containers/storage/images.go   | 17 +++++-----
+ .../github.com/containers/storage/layers.go   | 17 +++++-----
+ vendor/github.com/containers/storage/store.go | 17 +++++-----
+ 5 files changed, 59 insertions(+), 40 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/containers.go b/vendor/github.com/containers/storage/containers.go
+index 112ae20..cd9353e 100644
+--- a/vendor/github.com/containers/storage/containers.go
++++ b/vendor/github.com/containers/storage/containers.go
+@@ -12,6 +12,7 @@ import (
+ 	"github.com/containers/storage/pkg/ioutils"
+ 	"github.com/containers/storage/pkg/stringid"
+ 	"github.com/containers/storage/pkg/truncindex"
++	"github.com/containers/storage/pkg/filelocker"
+ 	digest "github.com/opencontainers/go-digest"
+ 	"github.com/pkg/errors"
+ )
+@@ -107,8 +108,8 @@ type ContainerStore interface {
+ }
+ 
+ type containerStore struct {
+-	lockfile   Locker
+-	rolockfile Locker
++	lockfile   filelocker.Locker
++	rolockfile filelocker.Locker
+ 	dir        string
+ 	containers []*Container
+ 	idindex    *truncindex.TruncIndex
+@@ -244,14 +245,14 @@ func (r *containerStore) Save() error {
+ 
+ func newContainerStore(readonly bool, dir string) (ContainerStore, error) {
+ 	var err error
+-	var lockfile, rolockfile Locker
++	var lockfile, rolockfile filelocker.Locker
+ 	if !readonly {
+ 		if err := os.MkdirAll(dir, 0700); err != nil {
+ 			return nil, err
+ 		}
+-		lockfile, err = GetLockfile(filepath.Join(dir, "containers.lock"))
++		lockfile, err = filelocker.GetLockfile(filepath.Join(dir, "containers.lock"))
+ 	} else {
+-		rolockfile, err = GetROLockfile(filepath.Join(dir, "containers.lock"))
++		rolockfile, err = filelocker.GetROLockfile(filepath.Join(dir, "containers.lock"))
+ 	}
+ 	if err != nil {
+ 		return nil, err
+@@ -277,8 +278,8 @@ func newContainerStore(readonly bool, dir string) (ContainerStore, error) {
+ 		if err != nil {
+ 			return nil, err
+ 		}
+-		ReleaseLockfile(filepath.Join(dir, "containers.lock"))
+-		lockfile, err = GetLockfile(filepath.Join(dir, "containers.lock"))
++		filelocker.ReleaseLockfile(filepath.Join(dir, "containers.lock"))
++		lockfile, err = filelocker.GetLockfile(filepath.Join(dir, "containers.lock"))
+ 		if err != nil {
+ 			return nil, err
+ 		}
+diff --git a/vendor/github.com/containers/storage/drivers/quota/projectquota.go b/vendor/github.com/containers/storage/drivers/quota/projectquota.go
+index 844e02a..a160530 100644
+--- a/vendor/github.com/containers/storage/drivers/quota/projectquota.go
++++ b/vendor/github.com/containers/storage/drivers/quota/projectquota.go
+@@ -79,6 +79,7 @@ import (
+ 	"sync"
+ 	"unsafe"
+ 
++	"github.com/containers/storage/pkg/filelocker"
+ 	"github.com/sirupsen/logrus"
+ 	"golang.org/x/sys/unix"
+ )
+@@ -91,11 +92,14 @@ type Quota struct {
+ // Control - Context to be used by storage driver (e.g. overlay)
+ // who wants to apply project quotas to container dirs
+ type Control struct {
++	basePath          string
++	backingFs         string
+ 	backingFsBlockDev string
+ 	nextProjectID     uint32
+ 	quotas            map[string]uint32
+ 	quotaOps          QuotafileOps
+ 	lock              sync.Mutex
++	filelock          filelocker.Locker
+ }
+ 
+ // QuotafileOps is a interface for quotafile operations
+@@ -133,6 +137,12 @@ func NewControl(basePath string, fs string) (*Control, error) {
+ 	//
+ 	// Get project id of parent dir as minimal id to be used by driver
+ 	//
++	lockfile, err := filelocker.GetLockfile(filepath.Join(basePath, "quota.lock"))
++	if err != nil {
++		return nil, err
++	}
++	lockfile.Lock()
++	defer lockfile.Unlock()
+ 	minProjectID, err := getProjectID(basePath)
+ 	if err != nil {
+ 		return nil, err
+@@ -179,6 +189,9 @@ func NewControl(basePath string, fs string) (*Control, error) {
+ 	}
+ 
+ 	q := Control{
++		basePath:          basePath,
++		backingFs:         fs,
++		filelock:          lockfile,
+ 		backingFsBlockDev: backingFsBlockDev,
+ 		nextProjectID:     minProjectID + 1,
+ 		quotas:            make(map[string]uint32),
+@@ -200,31 +213,33 @@ func NewControl(basePath string, fs string) (*Control, error) {
+ // SetQuota - assign a unique project id to directory and set the quota limits
+ // for that project id
+ func (q *Control) SetQuota(targetPath string, quota Quota) error {
+-
+-	q.lock.Lock()
+-	projectID, ok := q.quotas[targetPath]
++	quotaCtl, err := NewControl(q.basePath, q.backingFs)
++	if err != nil {
++		return err
++	}
++	quotaCtl.filelock.Lock()
++	defer quotaCtl.filelock.Unlock()
++	projectID, ok := quotaCtl.quotas[targetPath]
+ 	if !ok {
+-		projectID = q.nextProjectID
++		projectID = quotaCtl.nextProjectID
+ 
+ 		//
+ 		// assign project id to new container directory
+ 		//
+ 		err := setProjectID(targetPath, projectID)
+ 		if err != nil {
+-			q.lock.Unlock()
+ 			return err
+ 		}
+ 
+-		q.quotas[targetPath] = projectID
+-		q.nextProjectID++
++		quotaCtl.quotas[targetPath] = projectID
++		quotaCtl.nextProjectID++
+ 	}
+-	q.lock.Unlock()
+ 
+ 	//
+ 	// set the quota limit for the container's project id
+ 	//
+ 	logrus.Debugf("SetQuota(%s, %d): projectID=%d", targetPath, quota.Size, projectID)
+-	return q.quotaOps.SetProjectQuota(q.backingFsBlockDev, projectID, quota)
++	return quotaCtl.quotaOps.SetProjectQuota(quotaCtl.backingFsBlockDev, projectID, quota)
+ }
+ 
+ // XfsQuota is a struct implements quota operations
+diff --git a/vendor/github.com/containers/storage/images.go b/vendor/github.com/containers/storage/images.go
+index 96fbf84..8cb1a5a 100644
+--- a/vendor/github.com/containers/storage/images.go
++++ b/vendor/github.com/containers/storage/images.go
+@@ -10,6 +10,7 @@ import (
+ 	"github.com/containers/storage/pkg/ioutils"
+ 	"github.com/containers/storage/pkg/stringid"
+ 	"github.com/containers/storage/pkg/truncindex"
++	"github.com/containers/storage/pkg/filelocker"
+ 	digest "github.com/opencontainers/go-digest"
+ 	"github.com/pkg/errors"
+ )
+@@ -133,8 +134,8 @@ type ImageStore interface {
+ }
+ 
+ type imageStore struct {
+-	lockfile   Locker
+-	rolockfile Locker
++	lockfile   filelocker.Locker
++	rolockfile filelocker.Locker
+ 	dir        string
+ 	images     []*Image
+ 	idindex    *truncindex.TruncIndex
+@@ -264,14 +265,14 @@ func (r *imageStore) Save() error {
+ 
+ func newImageStore(readonly bool, dir string) (ImageStore, error) {
+ 	var err error
+-	var lockfile, rolockfile Locker
++	var lockfile, rolockfile filelocker.Locker
+ 	if !readonly {
+ 		if err := os.MkdirAll(dir, 0700); err != nil {
+ 			return nil, err
+ 		}
+-		lockfile, err = GetLockfile(filepath.Join(dir, "images.lock"))
++		lockfile, err = filelocker.GetLockfile(filepath.Join(dir, "images.lock"))
+ 	} else {
+-		rolockfile, err = GetROLockfile(filepath.Join(dir, "images.lock"))
++		rolockfile, err = filelocker.GetROLockfile(filepath.Join(dir, "images.lock"))
+ 	}
+ 	if err != nil {
+ 		return nil, err
+@@ -298,8 +299,8 @@ func newImageStore(readonly bool, dir string) (ImageStore, error) {
+ 		if err != nil {
+ 			return nil, err
+ 		}
+-		ReleaseLockfile(filepath.Join(dir, "images.lock"))
+-		lockfile, err = GetLockfile(filepath.Join(dir, "images.lock"))
++		filelocker.ReleaseLockfile(filepath.Join(dir, "images.lock"))
++		lockfile, err = filelocker.GetLockfile(filepath.Join(dir, "images.lock"))
+ 		if err != nil {
+ 			return nil, err
+ 		}
+@@ -314,7 +315,7 @@ func newImageStore(readonly bool, dir string) (ImageStore, error) {
+ }
+ 
+ func newROImageStore(dir string) (ROImageStore, error) {
+-	lockfile, err := GetROLockfile(filepath.Join(dir, "images.lock"))
++	lockfile, err := filelocker.GetROLockfile(filepath.Join(dir, "images.lock"))
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index 9022e6e..51d8dbd 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -25,6 +25,7 @@ import (
+ 	"github.com/pkg/errors"
+ 	"github.com/vbatts/tar-split/tar/asm"
+ 	"github.com/vbatts/tar-split/tar/storage"
++	"github.com/containers/storage/pkg/filelocker"
+ 	"github.com/sirupsen/logrus"
+ 	"github.com/docker/docker/pkg/mount"
+ )
+@@ -232,8 +233,8 @@ type LayerStore interface {
+ }
+ 
+ type layerStore struct {
+-	lockfile          Locker
+-	rolockfile        Locker
++	lockfile          filelocker.Locker
++	rolockfile        filelocker.Locker
+ 	rundir            string
+ 	driver            drivers.Driver
+ 	layerdir          string
+@@ -471,11 +472,11 @@ func newLayerStore(readonly bool, rundir string, layerdir string, driver drivers
+ 		}
+ 	}
+ 	var err error
+-	var lockfile, rolockfile Locker
++	var lockfile, rolockfile filelocker.Locker
+ 	if readonly {
+-		rolockfile, err = GetROLockfile(filepath.Join(layerdir, "layers.lock"))
++		rolockfile, err = filelocker.GetROLockfile(filepath.Join(layerdir, "layers.lock"))
+ 	} else {
+-		lockfile, err = GetLockfile(filepath.Join(layerdir, "layers.lock"))
++		lockfile, err = filelocker.GetLockfile(filepath.Join(layerdir, "layers.lock"))
+ 	}
+ 
+ 	if err != nil {
+@@ -505,8 +506,8 @@ func newLayerStore(readonly bool, rundir string, layerdir string, driver drivers
+ 		if err != nil {
+ 			return nil, err
+ 		}
+-		ReleaseLockfile(filepath.Join(layerdir, "layers.lock"))
+-		lockfile, err = GetLockfile(filepath.Join(layerdir, "layers.lock"))
++		filelocker.ReleaseLockfile(filepath.Join(layerdir, "layers.lock"))
++		lockfile, err = filelocker.GetLockfile(filepath.Join(layerdir, "layers.lock"))
+ 		if err != nil {
+ 			return nil, err
+ 		}
+@@ -521,7 +522,7 @@ func newLayerStore(readonly bool, rundir string, layerdir string, driver drivers
+ }
+ 
+ func newROLayerStore(rundir string, layerdir string, driver drivers.Driver) (ROLayerStore, error) {
+-	lockfile, err := GetROLockfile(filepath.Join(layerdir, "layers.lock"))
++	lockfile, err := filelocker.GetROLockfile(filepath.Join(layerdir, "layers.lock"))
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/vendor/github.com/containers/storage/store.go b/vendor/github.com/containers/storage/store.go
+index 61c0d9d..4d96bb3 100644
+--- a/vendor/github.com/containers/storage/store.go
++++ b/vendor/github.com/containers/storage/store.go
+@@ -22,6 +22,7 @@ import (
+ 	"github.com/containers/storage/pkg/idtools"
+ 	"github.com/containers/storage/pkg/ioutils"
+ 	"github.com/containers/storage/pkg/parsers"
++	"github.com/containers/storage/pkg/filelocker"
+ 	"github.com/containers/storage/pkg/stringid"
+ 	"github.com/containers/storage/pkg/stringutils"
+ 	digest "github.com/opencontainers/go-digest"
+@@ -41,7 +42,7 @@ var (
+ // data stores that we implement which are needed for both read-only and
+ // read-write files.
+ type ROFileBasedStore interface {
+-	Locker
++	filelocker.Locker
+ 
+ 	// Load reloads the contents of the store from disk.  It should be called
+ 	// with the lock held.
+@@ -525,8 +526,8 @@ type ContainerOptions struct {
+ type store struct {
+ 	lastLoaded      time.Time
+ 	runRoot         string
+-	graphLock       Locker
+-	graphROLock     Locker
++	graphLock       filelocker.Locker
++	graphROLock     filelocker.Locker
+ 	graphRoot       string
+ 	graphDriverName string
+ 	graphOptions    []string
+@@ -599,11 +600,11 @@ func GetStore(options StoreOptions) (Store, error) {
+ 	}
+ 
+ 	var err error
+-	var graphROLock, graphLock Locker
++	var graphROLock, graphLock filelocker.Locker
+ 	if options.ReadOnlay {
+-		graphROLock, err = GetROLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
++		graphROLock, err = filelocker.GetROLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
+ 	} else {
+-		graphLock, err = GetLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
++		graphLock, err = filelocker.GetLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
+ 	}
+ 	if err != nil {
+ 		return nil, err
+@@ -621,8 +622,8 @@ func GetStore(options StoreOptions) (Store, error) {
+ 
+ 	if options.ReadOnlay {
+ 		err = s.loadWithROLock()
+-		ReleaseLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
+-		graphLock, err = GetLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
++		filelocker.ReleaseLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
++		graphLock, err = filelocker.GetLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
+ 		if err != nil {
+ 			return nil, err
+ 		}
+-- 
+2.22.0
+

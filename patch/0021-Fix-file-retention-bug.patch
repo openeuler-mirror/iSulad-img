@@ -1,0 +1,39 @@
+From 50d558f03453bcc63e5e26387f46726ccdc7132a Mon Sep 17 00:00:00 2001
+From: WuJing <wujing50@huawei.com>
+Date: Mon, 10 Jun 2019 10:54:43 +0800
+Subject: [PATCH 21/30] Fix file retention bug
+
+Signed-off-by: WuJing <wujing50@huawei.com>
+---
+ vendor/github.com/containers/storage/layers.go | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index a466f05..b50dac7 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -404,7 +404,7 @@ func (r *layerStore) SaveLayerMountPoint(layer *Layer) error {
+ }
+ 
+ func (r *layerStore) SaveMount(layer *Layer) error {
+-	if layer.MountCount == 0 {
++	if layer.MountCount <= 0 {
+ 		return r.DeleteLayerMountPoint(layer)
+ 	}
+ 	return r.SaveLayerMountPoint(layer)
+@@ -927,10 +927,10 @@ func (r *layerStore) Delete(id string) error {
+ 	// This check is needed for idempotency of delete where the layer could have been
+ 	// already unmounted (since c/storage gives you that API directly)
+ 	for layer.MountCount > 0 {
+-		if err = r.LoadLayerMountPoint(layer); err != nil {
++		if _, err = r.Unmount(id, false); err != nil {
+ 			return err
+ 		}
+-		if _, err = r.Unmount(id, false); err != nil {
++		if err = r.LoadLayerMountPoint(layer); err != nil {
+ 			return err
+ 		}
+ 	}
+-- 
+2.22.0
+

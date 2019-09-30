@@ -1,0 +1,59 @@
+From 13719f94d478e89b4adfa92f46f124bb5fbbf7ae Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Thu, 4 Jul 2019 16:19:56 +0800
+Subject: [PATCH 24/30] Change perm and add max file size check
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../image/pkg/docker/config/config.go         | 21 ++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/vendor/github.com/containers/image/pkg/docker/config/config.go b/vendor/github.com/containers/image/pkg/docker/config/config.go
+index 3033f12..1e84086 100644
+--- a/vendor/github.com/containers/image/pkg/docker/config/config.go
++++ b/vendor/github.com/containers/image/pkg/docker/config/config.go
+@@ -37,6 +37,9 @@ var (
+ 	// ErrNotLoggedIn is returned for users not logged into a registry
+ 	// that they are trying to logout of
+ 	ErrNotLoggedIn = errors.New("not logged in")
++
++	// Max size is 10M
++	maxAuthsFileSize = 10 * 1024 * 1024
+ )
+ 
+ // SetAuthentication stores the username and password in the auth.json file
+@@ -187,6 +190,18 @@ func decryptAuths(dir string, auths *dockerConfigFile) error {
+ func readJSONFile(path string, legacyFormat bool) (dockerConfigFile, error) {
+ 	var auths dockerConfigFile
+ 
++	fileInfo, err := os.Stat(path)
++	if err != nil {
++		if !os.IsNotExist(err) {
++			return dockerConfigFile{}, errors.Wrapf(err, "error stat auth file at %q", path)
++		}
++	} else {
++		if fileInfo.Size() > int64(maxAuthsFileSize) {
++			return dockerConfigFile{}, errors.Wrapf(errors.New("Max size exceeded"),
++				"error read auth file at %q", path)
++		}
++	}
++
+ 	raw, err := ioutil.ReadFile(path)
+ 	if err != nil {
+ 		if os.IsNotExist(err) {
+@@ -278,7 +293,11 @@ func modifyJSON(sys *types.SystemContext, editor func(auths *dockerConfigFile) (
+ 			return errors.Wrapf(err, "error marshaling JSON %q", path)
+ 		}
+ 
+-		if err = ioutil.WriteFile(path, newData, 0755); err != nil {
++		if len(newData) > maxAuthsFileSize {
++			return errors.Wrapf(errors.New("Max size exceeded"), "error saving JSON %q", path)
++		}
++
++		if err = ioutil.WriteFile(path, newData, 0600); err != nil {
+ 			return errors.Wrapf(err, "error writing to file %q", path)
+ 		}
+ 	}
+-- 
+2.22.0
+

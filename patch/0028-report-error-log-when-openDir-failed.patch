@@ -1,0 +1,29 @@
+From 79a497152a2236991df0c0e4d54d9d174646b5e2 Mon Sep 17 00:00:00 2001
+From: TanYiFeng <tanyifeng1@huawei.com>
+Date: Fri, 26 Jul 2019 05:02:55 -0400
+Subject: [PATCH 28/30] report error log when openDir failed
+
+Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
+---
+ .../containers/storage/drivers/quota/projectquota.go          | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/drivers/quota/projectquota.go b/vendor/github.com/containers/storage/drivers/quota/projectquota.go
+index a160530..c90c46f 100644
+--- a/vendor/github.com/containers/storage/drivers/quota/projectquota.go
++++ b/vendor/github.com/containers/storage/drivers/quota/projectquota.go
+@@ -448,9 +448,9 @@ func openDir(path string) (*C.DIR, error) {
+ 	Cpath := C.CString(path)
+ 	defer free(Cpath)
+ 
+-	dir := C.opendir(Cpath)
++	dir, errno := C.opendir(Cpath)
+ 	if dir == nil {
+-		return nil, fmt.Errorf("Can't open dir")
++		return nil, fmt.Errorf("Can't open dir %s: %v", path, errno.Error())
+ 	}
+ 	return dir, nil
+ }
+-- 
+2.22.0
+

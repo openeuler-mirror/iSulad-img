@@ -1,0 +1,366 @@
+From c4659966717b6039a64d7675122163033e2a8ef9 Mon Sep 17 00:00:00 2001
+From: TanYiFeng <tanyifeng1@huawei.com>
+Date: Mon, 20 May 2019 10:31:12 -0400
+Subject: [PATCH 18/30] isulad-kit-vendor: fix compile error
+
+Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
+---
+ .../storage/pkg/filelocker/lockfile.go        | 101 ++++++++++++++
+ .../storage/pkg/filelocker/lockfile_darwin.go |  19 +++
+ .../storage/pkg/filelocker/lockfile_linux.go  |  20 +++
+ .../storage/pkg/filelocker/lockfile_unix.go   | 123 ++++++++++++++++++
+ .../pkg/filelocker/lockfile_windows.go        |  51 ++++++++
+ 5 files changed, 314 insertions(+)
+ create mode 100644 vendor/github.com/containers/storage/pkg/filelocker/lockfile.go
+ create mode 100644 vendor/github.com/containers/storage/pkg/filelocker/lockfile_darwin.go
+ create mode 100644 vendor/github.com/containers/storage/pkg/filelocker/lockfile_linux.go
+ create mode 100644 vendor/github.com/containers/storage/pkg/filelocker/lockfile_unix.go
+ create mode 100644 vendor/github.com/containers/storage/pkg/filelocker/lockfile_windows.go
+
+diff --git a/vendor/github.com/containers/storage/pkg/filelocker/lockfile.go b/vendor/github.com/containers/storage/pkg/filelocker/lockfile.go
+new file mode 100644
+index 0000000..0b30fee
+--- /dev/null
++++ b/vendor/github.com/containers/storage/pkg/filelocker/lockfile.go
+@@ -0,0 +1,101 @@
++package filelocker
++
++import (
++	"fmt"
++	"path/filepath"
++	"sync"
++	"time"
++
++	"github.com/pkg/errors"
++)
++
++var (
++	// ErrLockReadOnly indicates that the caller only took a read-only lock, and is not allowed to write.
++	ErrLockReadOnly = errors.New("lock is not a read-write lock")
++)
++
++// A Locker represents a file lock where the file is used to cache an
++// identifier of the last party that made changes to whatever's being protected
++// by the lock.
++type Locker interface {
++	sync.Locker
++
++	// Touch records, for others sharing the lock, that the caller was the
++	// last writer.  It should only be called with the lock held.
++	Touch() error
++
++	// Modified() checks if the most recent writer was a party other than the
++	// last recorded writer.  It should only be called with the lock held.
++	Modified() (bool, error)
++
++	// TouchedSince() checks if the most recent writer modified the file (likely using Touch()) after the specified time.
++	TouchedSince(when time.Time) bool
++
++	// IsReadWrite() checks if the lock file is read-write
++	IsReadWrite() bool
++
++	// Locked() checks if lock is locked
++	Locked() bool
++}
++
++var (
++	lockfiles     map[string]Locker
++	lockfilesLock sync.Mutex
++)
++
++func ReleaseLockfile(path string) {
++	lockfilesLock.Lock()
++	defer lockfilesLock.Unlock()
++	if lockfiles == nil {
++		return
++	}
++	cleanPath := filepath.Clean(path)
++	if _, ok := lockfiles[cleanPath]; ok {
++		delete(lockfiles, cleanPath)
++	}
++}
++// GetLockfile opens a read-write lock file, creating it if necessary.  The
++// Locker object it returns will be returned unlocked.
++func GetLockfile(path string) (Locker, error) {
++	lockfilesLock.Lock()
++	defer lockfilesLock.Unlock()
++	if lockfiles == nil {
++		lockfiles = make(map[string]Locker)
++	}
++	cleanPath := filepath.Clean(path)
++	if locker, ok := lockfiles[cleanPath]; ok {
++		if !locker.IsReadWrite() {
++			return nil, errors.Wrapf(ErrLockReadOnly, "lock %q is a read-only lock", cleanPath)
++		}
++		return locker, nil
++	}
++	locker, err := getLockFile(path, false) // platform dependent locker
++	if err != nil {
++		return nil, err
++	}
++	lockfiles[filepath.Clean(path)] = locker
++	return locker, nil
++}
++
++// GetROLockfile opens a read-only lock file.  The Locker object it returns
++// will be returned unlocked.
++func GetROLockfile(path string) (Locker, error) {
++	lockfilesLock.Lock()
++	defer lockfilesLock.Unlock()
++	if lockfiles == nil {
++		lockfiles = make(map[string]Locker)
++	}
++	cleanPath := filepath.Clean(path)
++	if locker, ok := lockfiles[cleanPath]; ok {
++		if locker.IsReadWrite() {
++			return nil, fmt.Errorf("lock %q is a read-write lock", cleanPath)
++		}
++		return locker, nil
++	}
++	locker, err := getLockFile(path, true) // platform dependent locker
++	if err != nil {
++		return nil, err
++	}
++	lockfiles[filepath.Clean(path)] = locker
++	return locker, nil
++}
+diff --git a/vendor/github.com/containers/storage/pkg/filelocker/lockfile_darwin.go b/vendor/github.com/containers/storage/pkg/filelocker/lockfile_darwin.go
+new file mode 100644
+index 0000000..c1e050c
+--- /dev/null
++++ b/vendor/github.com/containers/storage/pkg/filelocker/lockfile_darwin.go
+@@ -0,0 +1,19 @@
++// +build darwin freebsd
++
++package filelocker
++
++import (
++	"time"
++
++	"golang.org/x/sys/unix"
++)
++
++func (l *lockfile) TouchedSince(when time.Time) bool {
++	st := unix.Stat_t{}
++	err := unix.Fstat(int(l.fd), &st)
++	if err != nil {
++		return true
++	}
++	touched := time.Unix(st.Mtimespec.Unix())
++	return when.Before(touched)
++}
+diff --git a/vendor/github.com/containers/storage/pkg/filelocker/lockfile_linux.go b/vendor/github.com/containers/storage/pkg/filelocker/lockfile_linux.go
+new file mode 100644
+index 0000000..7586813
+--- /dev/null
++++ b/vendor/github.com/containers/storage/pkg/filelocker/lockfile_linux.go
+@@ -0,0 +1,20 @@
++// +build linux solaris
++
++package filelocker
++
++import (
++	"time"
++
++	"golang.org/x/sys/unix"
++)
++
++// TouchedSince indicates if the lock file has been touched since the specified time
++func (l *lockfile) TouchedSince(when time.Time) bool {
++	st := unix.Stat_t{}
++	err := unix.Fstat(int(l.fd), &st)
++	if err != nil {
++		return true
++	}
++	touched := time.Unix(st.Mtim.Unix())
++	return when.Before(touched)
++}
+diff --git a/vendor/github.com/containers/storage/pkg/filelocker/lockfile_unix.go b/vendor/github.com/containers/storage/pkg/filelocker/lockfile_unix.go
+new file mode 100644
+index 0000000..0a4e349
+--- /dev/null
++++ b/vendor/github.com/containers/storage/pkg/filelocker/lockfile_unix.go
+@@ -0,0 +1,123 @@
++// +build linux solaris darwin freebsd
++
++package filelocker
++
++import (
++	"os"
++	"sync"
++	"time"
++
++	"github.com/containers/storage/pkg/stringid"
++	"github.com/pkg/errors"
++	"golang.org/x/sys/unix"
++)
++
++func getLockFile(path string, ro bool) (Locker, error) {
++	var fd int
++	var err error
++	if ro {
++		fd, err = unix.Open(path, os.O_RDONLY, 0)
++	} else {
++		fd, err = unix.Open(path, os.O_RDWR|os.O_CREATE, unix.S_IRUSR|unix.S_IWUSR)
++	}
++	if err != nil {
++		return nil, errors.Wrapf(err, "error opening %q", path)
++	}
++	unix.CloseOnExec(fd)
++	if ro {
++		return &lockfile{file: path, fd: uintptr(fd), lw: stringid.GenerateRandomID(), locktype: unix.F_RDLCK, locked: false}, nil
++	}
++	return &lockfile{file: path, fd: uintptr(fd), lw: stringid.GenerateRandomID(), locktype: unix.F_WRLCK, locked: false}, nil
++}
++
++type lockfile struct {
++	mu       sync.Mutex
++	file     string
++	fd       uintptr
++	lw       string
++	locktype int16
++	locked   bool
++}
++
++// Lock locks the lock file
++func (l *lockfile) Lock() {
++	lk := unix.Flock_t{
++		Type:   l.locktype,
++		Whence: int16(os.SEEK_SET),
++		Start:  0,
++		Len:    0,
++		Pid:    int32(os.Getpid()),
++	}
++	l.mu.Lock()
++	l.locked = true
++	for unix.FcntlFlock(l.fd, unix.F_SETLKW, &lk) != nil {
++		time.Sleep(10 * time.Millisecond)
++	}
++}
++
++// Unlock unlocks the lock file
++func (l *lockfile) Unlock() {
++	lk := unix.Flock_t{
++		Type:   unix.F_UNLCK,
++		Whence: int16(os.SEEK_SET),
++		Start:  0,
++		Len:    0,
++		Pid:    int32(os.Getpid()),
++	}
++	for unix.FcntlFlock(l.fd, unix.F_SETLKW, &lk) != nil {
++		time.Sleep(10 * time.Millisecond)
++	}
++	l.locked = false
++	l.mu.Unlock()
++}
++
++// Check if lock is locked
++func (l *lockfile) Locked() bool {
++	return l.locked
++}
++
++// Touch updates the lock file with the UID of the user
++func (l *lockfile) Touch() error {
++	l.lw = stringid.GenerateRandomID()
++	id := []byte(l.lw)
++	_, err := unix.Seek(int(l.fd), 0, os.SEEK_SET)
++	if err != nil {
++		return err
++	}
++	n, err := unix.Write(int(l.fd), id)
++	if err != nil {
++		return err
++	}
++	if n != len(id) {
++		return unix.ENOSPC
++	}
++	err = unix.Fsync(int(l.fd))
++	if err != nil {
++		return err
++	}
++	return nil
++}
++
++// Modified indicates if the lock file has been updated since the last time it was loaded
++func (l *lockfile) Modified() (bool, error) {
++	id := []byte(l.lw)
++	_, err := unix.Seek(int(l.fd), 0, os.SEEK_SET)
++	if err != nil {
++		return true, err
++	}
++	n, err := unix.Read(int(l.fd), id)
++	if err != nil {
++		return true, err
++	}
++	if n != len(id) {
++		return true, unix.ENOSPC
++	}
++	lw := l.lw
++	l.lw = string(id)
++	return l.lw != lw, nil
++}
++
++// IsRWLock indicates if the lock file is a read-write lock
++func (l *lockfile) IsReadWrite() bool {
++	return (l.locktype == unix.F_WRLCK)
++}
+diff --git a/vendor/github.com/containers/storage/pkg/filelocker/lockfile_windows.go b/vendor/github.com/containers/storage/pkg/filelocker/lockfile_windows.go
+new file mode 100644
+index 0000000..438e34e
+--- /dev/null
++++ b/vendor/github.com/containers/storage/pkg/filelocker/lockfile_windows.go
+@@ -0,0 +1,51 @@
++// +build windows
++
++package filelocker
++
++import (
++	"os"
++	"sync"
++	"time"
++)
++
++func getLockFile(path string, ro bool) (Locker, error) {
++	return &lockfile{locked: false}, nil
++}
++
++type lockfile struct {
++	mu     sync.Mutex
++	file   string
++	locked bool
++}
++
++func (l *lockfile) Lock() {
++	l.mu.Lock()
++	l.locked = true
++}
++
++func (l *lockfile) Unlock() {
++	l.locked = false
++	l.mu.Unlock()
++}
++
++func (l *lockfile) Locked() bool {
++	return l.locked
++}
++
++func (l *lockfile) Modified() (bool, error) {
++	return false, nil
++}
++func (l *lockfile) Touch() error {
++	return nil
++}
++func (l *lockfile) IsReadWrite() bool {
++	return false
++}
++
++func (l *lockfile) TouchedSince(when time.Time) bool {
++	stat, err := os.Stat(l.file)
++	if err != nil {
++		return true
++	}
++	return when.Before(stat.ModTime())
++}
+-- 
+2.22.0
+

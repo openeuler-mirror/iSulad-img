@@ -1,0 +1,494 @@
+From dbc7a5f3bb9cc61900e434d81d0dec05f531c4ce Mon Sep 17 00:00:00 2001
+From: LiFeng <lifeng68@huawei.com>
+Date: Thu, 4 Apr 2019 11:03:15 -0400
+Subject: [PATCH 02/30] add image integration check
+
+Signed-off-by: LiFeng <lifeng68@huawei.com>
+---
+ .../storage/drivers/overlay/overlay.go        |  54 ++++-
+ .../storage/drivers/overlay/randomid.go       |   7 +
+ .../github.com/containers/storage/layers.go   |  96 +++++++++
+ vendor/github.com/containers/storage/store.go | 190 ++++++++++++++++++
+ .../opencontainers/go-digest/verifiers.go     |  13 ++
+ 5 files changed, 358 insertions(+), 2 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+index df736c0..6b7e67f 100644
+--- a/vendor/github.com/containers/storage/drivers/overlay/overlay.go
++++ b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+@@ -207,11 +207,30 @@ func Init(home string, options []string, uidMaps, gidMaps []idtools.IDMap) (grap
+ 		return nil, fmt.Errorf("Storage option overlay.size only supported for backingFS XFS. Found %v", backingFs)
+ 	}
+ 
++	go d.cleanupLinkDir()
++
+ 	logrus.Debugf("backingFs=%s, projectQuotaSupported=%v, useNativeDiff=%v", backingFs, projectQuotaSupported, !d.useNaiveDiff())
+ 
+ 	return d, nil
+ }
+ 
++func (d *Driver) cleanupLinkDir() {
++	filepath.Walk(path.Join(d.home, linkDir), func(path string, f os.FileInfo, err error) error {
++		if _, serr := filepath.EvalSymlinks(path); serr != nil {
++			if os.IsNotExist(serr) {
++				logrus.Warnf("[overlay2]: remove invalid symlink: %s", path)
++				os.RemoveAll(path)
++			} else {
++				logrus.Warnf("[overlay2]: Evaluate symlink(%s) failed: %s", path, serr)
++			}
++		}
++		// always return nil, to walk all the symlink
++		return nil
++	})
++
++	return
++}
++
+ func parseOptions(options []string) (*overlayOptions, error) {
+ 	o := &overlayOptions{}
+ 	for _, option := range options {
+@@ -823,8 +842,39 @@ func (d *Driver) Put(id string) error {
+ 
+ // Exists checks to see if the id is already mounted.
+ func (d *Driver) Exists(id string) bool {
+-	_, err := os.Stat(d.dir(id))
+-	return err == nil
++	var rerr error
++	defer func() {
++		if rerr != nil {
++			logrus.Warnf("layer(%s) not exist: %s", id, rerr)
++			d.Remove(id)
++		}
++	}()
++
++	// check if the id directory exist and is valid
++	// check if link file exist and get link string from it
++	// check if symlink file exist
++	// if symlink not exist, create a new one and update link file
++	// any steps failed ,we will return false and remove this id layer
++	_, rerr = os.Stat(d.dir(id))
++	if rerr == nil {
++		lstr, err := ioutil.ReadFile(path.Join(d.dir(id), "link"))
++		// link is valid
++		if err == nil && verifyID(string(lstr), idLength) {
++			// check symlink
++			_, rerr = os.Stat(path.Join(d.home, linkDir, string(lstr)))
++			if rerr != nil {
++				os.RemoveAll(path.Join(d.home, linkDir, string(lstr)))
++
++				logrus.Infof("[overlay2]: symlink (%s) is missing, create a new one", lstr)
++				if rerr = os.Symlink(path.Join("..", id, "diff"), path.Join(d.home, linkDir, string(lstr))); rerr != nil {
++					logrus.Warnf("[overlay2]: symlink (%s) is missing, failed to create a new one %s", lstr, rerr)
++					return false
++				}
++			}
++			return true
++		}
++	}
++	return false
+ }
+ 
+ // isParent returns if the passed in parent is the direct parent of the passed in layer
+diff --git a/vendor/github.com/containers/storage/drivers/overlay/randomid.go b/vendor/github.com/containers/storage/drivers/overlay/randomid.go
+index fc565ef..31e7c0c 100644
+--- a/vendor/github.com/containers/storage/drivers/overlay/randomid.go
++++ b/vendor/github.com/containers/storage/drivers/overlay/randomid.go
+@@ -10,6 +10,7 @@ import (
+ 	"os"
+ 	"syscall"
+ 	"time"
++	"regexp"
+ 
+ 	"github.com/sirupsen/logrus"
+ 	"golang.org/x/sys/unix"
+@@ -79,3 +80,9 @@ func retryOnError(err error) bool {
+ 
+ 	return false
+ }
++
++func verifyID(id string, l int) bool {
++	regstr := fmt.Sprintf("^[A-Z0-9]{%d}$", l)
++	rgxp := regexp.MustCompile(regstr)
++	return rgxp.MatchString(id)
++}
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index 299d2f8..a6d90d3 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -25,6 +25,7 @@ import (
+ 	"github.com/pkg/errors"
+ 	"github.com/vbatts/tar-split/tar/asm"
+ 	"github.com/vbatts/tar-split/tar/storage"
++	"github.com/sirupsen/logrus"
+ )
+ 
+ const (
+@@ -170,6 +171,8 @@ type ROLayerStore interface {
+ 
+ 	// Layers returns a slice of the known layers.
+ 	Layers() ([]Layer, error)
++
++	CheckLayer(id string) error
+ }
+ 
+ // LayerStore wraps a graph driver, adding the ability to refer to layers by
+@@ -994,6 +997,63 @@ func (r *layerStore) newFileGetter(id string) (drivers.FileGetCloser, error) {
+ 	}, nil
+ }
+ 
++func (r *layerStore) CheckLayer(id string) error {
++
++	logrus.Debugf("Checking Layer %s",id)
++
++	if !r.driver.Exists(id) {
++		logrus.Warnf("Invalid data of layer %s", id)
++		return fmt.Errorf("Invalid data of layer %s", id)
++	}
++
++	layer, ok := r.lookup(id)
++	if !ok {
++		return ErrLayerUnknown
++	}
++	var metadata storage.Unpacker
++	tsfile, err := os.Open(r.tspath(id))
++	if err != nil {
++		if !os.IsNotExist(err) {
++			return err
++		}
++	}
++	defer tsfile.Close()
++
++	decompressor, err := pgzip.NewReader(tsfile)
++	if err != nil {
++		return err
++	}
++	defer decompressor.Close()
++
++	tsbytes, err := ioutil.ReadAll(decompressor)
++	if err != nil {
++		return err
++	}
++
++	metadata = storage.NewJSONUnpacker(bytes.NewBuffer(tsbytes))
++
++	fgetter, err := r.newFileGetter(id)
++	if err != nil {
++		return err
++	}
++	defer fgetter.Close()
++
++	tarstream := asm.NewOutputTarStream(fgetter, metadata)
++
++	rc, err := newLayerVerifiedReadCloser(tarstream, digest.Digest(layer.UncompressedDigest))
++	if err != nil {
++		return err
++	}
++
++	defer rc.Close()
++
++	if _, err := io.Copy(ioutil.Discard, rc); err != nil {
++		return err
++	}
++
++	return nil
++}
++
+ func (r *layerStore) Diff(from, to string, options *DiffOptions) (io.ReadCloser, error) {
+ 	var metadata storage.Unpacker
+ 
+@@ -1223,3 +1283,39 @@ func (r *layerStore) TouchedSince(when time.Time) bool {
+ func (r *layerStore) Locked() bool {
+ 	return r.lockfile.Locked()
+ }
++
++func newLayerVerifiedReadCloser(readcloser io.ReadCloser, dg digest.Digest) (io.ReadCloser, error) {
++	layerVerifier, err := digest.NewDigestVerifier(dg)
++	if err != nil {
++		return nil, err
++	}
++	return &layerVerifiedReadCloser{
++		readcloser:             readcloser,
++		digest:                 dg,
++		digestverifier:         layerVerifier,
++	}, nil
++}
++
++type layerVerifiedReadCloser struct {
++	readcloser          io.ReadCloser
++	digest              digest.Digest
++	digestverifier      digest.Verifier
++}
++
++func (lvrc *layerVerifiedReadCloser) Read(d []byte) (s int, err error) {
++	s, err = lvrc.readcloser.Read(d)
++	if s > 0 {
++		if s, err := lvrc.digestverifier.Write(d[:s]); err != nil {
++			return s, err
++		}
++	}
++	if err == io.EOF {
++		if !lvrc.digestverifier.Verified() {
++			err = fmt.Errorf("Could not verify layer data for: %s. May be due to internal files in the layer store were modified.", lvrc.digest)
++		}
++	}
++	return
++}
++func (lvrc *layerVerifiedReadCloser) Close() error {
++	return lvrc.readcloser.Close()
++}
+diff --git a/vendor/github.com/containers/storage/store.go b/vendor/github.com/containers/storage/store.go
+index b14af2d..b177cb4 100644
+--- a/vendor/github.com/containers/storage/store.go
++++ b/vendor/github.com/containers/storage/store.go
+@@ -11,6 +11,7 @@ import (
+ 	"strings"
+ 	"sync"
+ 	"time"
++	"crypto/sha256"
+ 
+ 	// register all of the built-in drivers
+ 	_ "github.com/containers/storage/drivers/register"
+@@ -27,6 +28,7 @@ import (
+ 	digest "github.com/opencontainers/go-digest"
+ 	"github.com/opencontainers/selinux/go-selinux/label"
+ 	"github.com/pkg/errors"
++	"github.com/sirupsen/logrus"
+ )
+ 
+ var (
+@@ -400,6 +402,14 @@ type Store interface {
+ 	// and may have different metadata, big data items, and flags.
+ 	ImagesByTopLayer(id string) ([]*Image, error)
+ 
++	CheckImage(id string) error
++
++	DeleteContainersByImage(id string) error
++
++	GetCheckedLayers()
++
++	CleanupCheckedLayers()
++
+ 	// ImagesByDigest returns a list of images which contain a big data item
+ 	// named ImageDigestBigDataKey whose contents have the specified digest.
+ 	ImagesByDigest(d digest.Digest) ([]*Image, error)
+@@ -527,6 +537,7 @@ type store struct {
+ 	imageStore      ImageStore
+ 	roImageStores   []ROImageStore
+ 	containerStore  ContainerStore
++	checkedLayers   map[string]bool
+ }
+ 
+ // GetStore attempts to find an already-created Store object matching the
+@@ -1954,6 +1965,185 @@ func (s *store) Lookup(name string) (string, error) {
+ 	return "", ErrLayerUnknown
+ }
+ 
++func (s *store) getcheckDataPath() string {
++
++	sum := sha256.Sum256([]byte(s.RunRoot()))
++	return filepath.Join(s.RunRoot(), fmt.Sprintf("%x.json", sum))
++}
++
++func (s *store) CleanupCheckedLayers() {
++	s.checkedLayers = make(map[string]bool)
++}
++
++func (s *store) GetCheckedLayers()  {
++	checkedLayers := make(map[string]bool)
++	defer func() {
++		s.checkedLayers = checkedLayers
++	}()
++
++	path := s.getcheckDataPath()
++	output, err := ioutil.ReadFile(path)
++	if err != nil {
++		return
++	}
++	for _, line := range strings.Split(string(output), "\n") {
++		item := strings.TrimSpace(line)
++		checkedLayers[item] = true
++	}
++
++	return
++}
++
++func (s *store) addCheckedLayer(id string) error {
++	s.checkedLayers[id] = true
++
++	checkDataPath := s.getcheckDataPath()
++
++	f, err := os.OpenFile(checkDataPath, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
++	if err != nil {
++		logrus.Warningf("addCheckedLayer: failed to open checked Data: %s, err: %s", checkDataPath, err)
++		return err
++	}
++	defer f.Close()
++
++	_, err = f.WriteString(id + "\n")
++
++	if err != nil {
++		logrus.Warningf("addCheckedLayer: failed to save checked Data: %s, err: %s", checkDataPath, err)
++		return err
++	}
++
++	return nil
++}
++
++func (s *store) DeleteContainersByImage(id string) error {
++	rlstore, err := s.LayerStore()
++	if err != nil {
++		return err
++	}
++	ristore, err := s.ImageStore()
++	if err != nil {
++		return err
++	}
++	rcstore, err := s.ContainerStore()
++	if err != nil {
++		return err
++	}
++
++	rlstore.Lock()
++	defer rlstore.Unlock()
++	if modified, err := rlstore.Modified(); modified || err != nil {
++		rlstore.Load()
++	}
++	ristore.Lock()
++	defer ristore.Unlock()
++	if modified, err := ristore.Modified(); modified || err != nil {
++		ristore.Load()
++	}
++	rcstore.Lock()
++	defer rcstore.Unlock()
++	if modified, err := rcstore.Modified(); modified || err != nil {
++		rcstore.Load()
++	}
++
++	containers, err := rcstore.Containers()
++	if err != nil {
++		return err
++	}
++
++	for _, container := range containers {
++		if (container.ImageID == id) {
++			containerID := container.ID
++			if rcstore.Exists(containerID) {
++				if container, err := rcstore.Get(containerID); err == nil {
++					if rlstore.Exists(container.LayerID) {
++						if err = rlstore.Delete(container.LayerID); err != nil {
++							return err
++						}
++					}
++					if err = rcstore.Delete(containerID); err != nil {
++						return err
++					}
++					middleDir := s.graphDriverName + "-containers"
++					gcpath := filepath.Join(s.GraphRoot(), middleDir, container.ID)
++					if err = os.RemoveAll(gcpath); err != nil {
++						return err
++					}
++					rcpath := filepath.Join(s.RunRoot(), middleDir, container.ID)
++					if err = os.RemoveAll(rcpath); err != nil {
++						return err
++					}
++				}
++			}
++		}
++	}
++	return nil
++}
++
++func (s *store) CheckImage(id string) error {
++	rlstore, err := s.LayerStore()
++	if err != nil {
++		return err
++	}
++	ristore, err := s.ImageStore()
++	if err != nil {
++		return err
++	}
++	rcstore, err := s.ContainerStore()
++	if err != nil {
++		return err
++	}
++
++	rlstore.Lock()
++	defer rlstore.Unlock()
++	if modified, err := rlstore.Modified(); modified || err != nil {
++		rlstore.Load()
++	}
++	ristore.Lock()
++	defer ristore.Unlock()
++	if modified, err := ristore.Modified(); modified || err != nil {
++		ristore.Load()
++	}
++	rcstore.Lock()
++	defer rcstore.Unlock()
++	if modified, err := rcstore.Modified(); modified || err != nil {
++		rcstore.Load()
++	}
++
++	image, err := ristore.Get(id)
++	if err != nil {
++		return err
++	}
++
++	layersToCheck := []string{}
++	layer := image.TopLayer
++	for layer != "" {
++		parent := ""
++		if l, err := rlstore.Get(layer); err == nil {
++			parent = l.Parent
++		}
++		layersToCheck = append(layersToCheck, layer)
++		layer = parent
++	}
++
++	// Check for all layers belong to the image.
++	for _, layer := range layersToCheck {
++		if _, exist := s.checkedLayers[layer]; exist {
++			logrus.Infof("Layer Checked: %s, skip", layer)
++			continue
++		}
++		logrus.Debugf("Try to check layer %s", layer)
++		err := rlstore.CheckLayer(layer)
++		if err != nil {
++			return fmt.Errorf("layer %s check failed with: %s", layer, err)
++		}
++
++		//ignore errors
++		s.addCheckedLayer(layer)
++	}
++	return nil
++}
++
+ func (s *store) DeleteLayer(id string) error {
+ 	rlstore, err := s.LayerStore()
+ 	if err != nil {
+diff --git a/vendor/github.com/opencontainers/go-digest/verifiers.go b/vendor/github.com/opencontainers/go-digest/verifiers.go
+index 32125e9..32e85d6 100644
+--- a/vendor/github.com/opencontainers/go-digest/verifiers.go
++++ b/vendor/github.com/opencontainers/go-digest/verifiers.go
+@@ -31,6 +31,19 @@ type Verifier interface {
+ 	Verified() bool
+ }
+ 
++// NewDigestVerifier returns a verifier that compares the written bytes
++// against a passed in digest.
++func NewDigestVerifier(d Digest) (Verifier, error) {
++	if err := d.Validate(); err != nil {
++		return nil, err
++	}
++
++	return hashVerifier{
++		hash:   d.Algorithm().Hash(),
++		digest: d,
++	}, nil
++}
++
+ type hashVerifier struct {
+ 	digest Digest
+ 	hash   hash.Hash
+-- 
+2.22.0
+

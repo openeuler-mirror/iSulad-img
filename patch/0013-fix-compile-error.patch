@@ -1,0 +1,28 @@
+From 4aa80a5ab6f3bb8efcca3b437929eecab28e2b43 Mon Sep 17 00:00:00 2001
+From: LiuHao <liuhao27@huawei.com>
+Date: Thu, 2 May 2019 11:56:34 +0800
+Subject: [PATCH 13/30] fix compile error
+
+fix compile error
+
+Signed-off-by: LiuHao <liuhao27@huawei.com>
+---
+ vendor/github.com/containers/storage/layers.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index 4d5b9f8..b805e9a 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -956,7 +956,7 @@ func (r *layerStore) Get(id string) (*Layer, error) {
+ 		data, err := r.driver.Metadata(layer.ID)
+ 		if err == nil {
+ 			if mergedDir, ok := data["MergedDir"]; ok {
+-				result.MountPoint = mergeDir
++				result.MountPoint = mergedDir
+ 			}
+ 		}
+ 		return result, nil
+-- 
+2.22.0
+

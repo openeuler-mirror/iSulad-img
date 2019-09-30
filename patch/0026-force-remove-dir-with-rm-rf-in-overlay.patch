@@ -1,0 +1,32 @@
+From 304138c32d7926ac44d505720d68027d335dff5b Mon Sep 17 00:00:00 2001
+From: LiFeng <lifeng68@huawei.com>
+Date: Thu, 18 Jul 2019 06:20:49 -0400
+Subject: [PATCH 26/30] force remove dir with rm -rf in overlay
+
+Signed-off-by: LiFeng <lifeng68@huawei.com>
+---
+ .../containers/storage/drivers/overlay/overlay.go         | 8 ++------
+ 1 file changed, 2 insertions(+), 6 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+index a63f0d1..314722a 100644
+--- a/vendor/github.com/containers/storage/drivers/overlay/overlay.go
++++ b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+@@ -695,12 +695,8 @@ func (d *Driver) Remove(id string) error {
+ 	}
+ 
+ 	if err := system.EnsureRemoveAll(dir); err != nil && !os.IsNotExist(err) {
+-		if strings.Contains(err.Error(), "file name too long") {
+-			cmd := exec.Command("rm", "-rf", dir)
+-			if err := cmd.Run(); err != nil {
+-				return err
+-			}
+-		} else {
++		cmd := exec.Command("rm", "-rf", dir)
++		if err := cmd.Run(); err != nil {
+ 			return err
+ 		}
+ 	}
+-- 
+2.22.0
+

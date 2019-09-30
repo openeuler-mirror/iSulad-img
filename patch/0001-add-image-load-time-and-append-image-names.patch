@@ -1,0 +1,379 @@
+From b6de10372ac832bcb2dbecbb97dac2cd73dac44d Mon Sep 17 00:00:00 2001
+From: LiFeng <lifeng68@huawei.com>
+Date: Tue, 2 Apr 2019 23:37:17 -0400
+Subject: [PATCH 01/30] add image load time and append image names
+
+reason: 1. add image load time
+        2. append image names when pull image
+
+Signed-off-by: LiFeng <lifeng68@huawei.com>
+---
+ .../containers/image/storage/storage_image.go | 31 ++++++----
+ .../github.com/containers/storage/images.go   | 53 ++++++++++++++++
+ .../containers/storage/images_ffjson.go       | 60 +++++++++++++++++++
+ vendor/github.com/containers/storage/store.go | 42 +++++++++++++
+ 4 files changed, 173 insertions(+), 13 deletions(-)
+
+diff --git a/vendor/github.com/containers/image/storage/storage_image.go b/vendor/github.com/containers/image/storage/storage_image.go
+index b53fbdf..257ff6e 100644
+--- a/vendor/github.com/containers/image/storage/storage_image.go
++++ b/vendor/github.com/containers/image/storage/storage_image.go
+@@ -13,6 +13,7 @@ import (
+ 	"path/filepath"
+ 	"sync"
+ 	"sync/atomic"
++	"time"
+ 
+ 	"github.com/containers/image/image"
+ 	"github.com/containers/image/internal/tmpdir"
+@@ -675,6 +676,7 @@ func (s *storageImageDestination) Commit(ctx context.Context) error {
+ 	if intendedID == "" {
+ 		intendedID = s.computeID(man)
+ 	}
++
+ 	oldNames := []string{}
+ 	img, err := s.imageRef.transport.store.CreateImage(intendedID, nil, lastLayer, "", options)
+ 	if err != nil {
+@@ -717,23 +719,16 @@ func (s *storageImageDestination) Commit(ctx context.Context) error {
+ 			return errors.Wrapf(err, "error saving big data %q for image %q", blob.String(), img.ID)
+ 		}
+ 	}
+-	// Set the reference's name on the image.
+-	if name := s.imageRef.DockerReference(); len(oldNames) > 0 || name != nil {
+-		names := []string{}
+-		if name != nil {
+-			names = append(names, name.String())
+-		}
+-		if len(oldNames) > 0 {
+-			names = append(names, oldNames...)
+-		}
+-		if err := s.imageRef.transport.store.SetNames(img.ID, names); err != nil {
++	// Add the reference's name on the image.
++	if name := s.imageRef.DockerReference(); name != nil {
++		if err := s.imageRef.transport.store.AddName(img.ID, name.String()); err != nil {
+ 			if _, err2 := s.imageRef.transport.store.DeleteImage(img.ID, true); err2 != nil {
+ 				logrus.Debugf("error deleting incomplete image %q: %v", img.ID, err2)
+ 			}
+-			logrus.Debugf("error setting names %v on image %q: %v", names, img.ID, err)
+-			return errors.Wrapf(err, "error setting names %v on image %q", names, img.ID)
++			logrus.Debugf("error adding names %v on image %q: %v", name.String(), img.ID, err)
++			return errors.Wrapf(err, "error adding names %v on image %q", name.String(), img.ID)
+ 		}
+-		logrus.Debugf("set names of image %q to %v", img.ID, names)
++		logrus.Debugf("Add names of image %q to %v", img.ID, name.String())
+ 	}
+ 	// Save the manifest.  Use storage.ImageDigestBigDataKey as the item's
+ 	// name, so that its digest can be used to locate the image in the Store.
+@@ -773,6 +768,16 @@ func (s *storageImageDestination) Commit(ctx context.Context) error {
+ 		}
+ 		logrus.Debugf("saved image metadata %q", string(metadata))
+ 	}
++
++	if err = s.imageRef.transport.store.SetLoadedTime(img.ID, time.Now().UTC()); err != nil {
++		if _, err2 := s.imageRef.transport.store.DeleteImage(img.ID, true); err2 != nil {
++			logrus.Debugf("error deleting incomplete image %q: %v", img.ID, err2)
++		}
++		logrus.Debugf("error saving loaded time for image %q: %v", img.ID, err)
++		return err
++	}
++	logrus.Debugf("saved image LoadedTime %q", time.Now().UTC())
++
+ 	return nil
+ }
+ 
+diff --git a/vendor/github.com/containers/storage/images.go b/vendor/github.com/containers/storage/images.go
+index b10501b..99e3b1c 100644
+--- a/vendor/github.com/containers/storage/images.go
++++ b/vendor/github.com/containers/storage/images.go
+@@ -68,6 +68,12 @@ type Image struct {
+ 	// is set before using it.
+ 	Created time.Time `json:"created,omitempty"`
+ 
++	// Loaded is the datestamp for when this image was pulled.  Older
++	// versions of the library did not track this information, so callers
++	// will likely want to use the IsZero() method to verify that a value
++	// is set before using it.
++	Loaded time.Time `json:"Loaded,omitempty"`
++
+ 	Flags map[string]interface{} `json:"flags,omitempty"`
+ }
+ 
+@@ -117,6 +123,13 @@ type ImageStore interface {
+ 
+ 	// Wipe removes records of all images.
+ 	Wipe() error
++
++    // isulad: SetLoadedTime set the image pulled time
++    SetLoadedTime(id string, loaded time.Time) error
++
++	// AddName add the name for an image
++	// Duplicate names are removed from the list automatically.
++	AddName(id string, name string) error
+ }
+ 
+ type imageStore struct {
+@@ -141,6 +154,7 @@ func copyImage(i *Image) *Image {
+ 		BigDataSizes:    copyStringInt64Map(i.BigDataSizes),
+ 		BigDataDigests:  copyStringDigestMap(i.BigDataDigests),
+ 		Created:         i.Created,
++		Loaded:			 i.Loaded,
+ 		Flags:           copyStringInterfaceMap(i.Flags),
+ 	}
+ }
+@@ -342,6 +356,7 @@ func (r *imageStore) Create(id string, names []string, layer, metadata string, c
+ 	if created.IsZero() {
+ 		created = time.Now().UTC()
+ 	}
++	loaded := time.Now().UTC() // isulad add loaded time
+ 	if err == nil {
+ 		image = &Image{
+ 			ID:             id,
+@@ -353,6 +368,7 @@ func (r *imageStore) Create(id string, names []string, layer, metadata string, c
+ 			BigDataSizes:   make(map[string]int64),
+ 			BigDataDigests: make(map[string]digest.Digest),
+ 			Created:        created,
++			Loaded:			loaded,	// isulad add loaded time
+ 			Flags:          make(map[string]interface{}),
+ 		}
+ 		r.images = append(r.images, image)
+@@ -397,6 +413,17 @@ func (r *imageStore) SetMetadata(id, metadata string) error {
+ 	return ErrImageUnknown
+ }
+ 
++func (r *imageStore) SetLoadedTime(id string, loaded time.Time) error {
++	if !r.IsReadWrite() {
++		return errors.Wrapf(ErrStoreIsReadOnly, "not allowed to modify image LoadedTime at %q", r.imagespath())
++	}
++	if image, ok := r.lookup(id); ok {
++		image.Loaded = loaded
++		return r.Save()
++	}
++	return ErrImageUnknown
++}
++
+ func (r *imageStore) removeName(image *Image, name string) {
+ 	image.Names = stringSliceWithoutValue(image.Names, name)
+ }
+@@ -405,6 +432,7 @@ func (r *imageStore) SetNames(id string, names []string) error {
+ 	if !r.IsReadWrite() {
+ 		return errors.Wrapf(ErrStoreIsReadOnly, "not allowed to change image name assignments at %q", r.imagespath())
+ 	}
++
+ 	names = dedupeNames(names)
+ 	if image, ok := r.lookup(id); ok {
+ 		for _, name := range image.Names {
+@@ -422,6 +450,31 @@ func (r *imageStore) SetNames(id string, names []string) error {
+ 	return ErrImageUnknown
+ }
+ 
++func (r *imageStore) AddName(id string, name string) error {
++	if !r.IsReadWrite() {
++		return errors.Wrapf(ErrStoreIsReadOnly, "not allowed to change image name assignments at %q", r.imagespath())
++	}
++
++	names := []string{}
++	if image, ok := r.lookup(id); ok {
++		names = append(names, image.Names...)
++		names = append(names, name)
++		names = dedupeNames(names)
++		for _, name := range image.Names {
++			delete(r.byname, name)
++		}
++		for _, name := range names {
++			if otherImage, ok := r.byname[name]; ok {
++				r.removeName(otherImage, name)
++			}
++			r.byname[name] = image
++		}
++		image.Names = names
++		return r.Save()
++	}
++	return ErrImageUnknown
++}
++
+ func (r *imageStore) Delete(id string) error {
+ 	if !r.IsReadWrite() {
+ 		return errors.Wrapf(ErrStoreIsReadOnly, "not allowed to delete images at %q", r.imagespath())
+diff --git a/vendor/github.com/containers/storage/images_ffjson.go b/vendor/github.com/containers/storage/images_ffjson.go
+index 6b40ebd..4b0b42b 100644
+--- a/vendor/github.com/containers/storage/images_ffjson.go
++++ b/vendor/github.com/containers/storage/images_ffjson.go
+@@ -147,6 +147,20 @@ func (j *Image) MarshalJSONBuf(buf fflib.EncodingBuffer) error {
+ 		}
+ 		buf.WriteByte(',')
+ 	}
++	if true {
++		buf.WriteString(`"Loaded":`)
++
++		{
++
++			obj, err = j.Loaded.MarshalJSON()
++			if err != nil {
++				return err
++			}
++			buf.Write(obj)
++
++		}
++		buf.WriteByte(',')
++	}
+ 	if len(j.Flags) != 0 {
+ 		buf.WriteString(`"flags":`)
+ 		/* Falling back. type=map[string]interface {} kind=map */
+@@ -185,6 +199,8 @@ const (
+ 
+ 	ffjtImageCreated
+ 
++	ffjtImageLoaded
++
+ 	ffjtImageFlags
+ )
+ 
+@@ -208,6 +224,8 @@ var ffjKeyImageBigDataDigests = []byte("big-data-digests")
+ 
+ var ffjKeyImageCreated = []byte("created")
+ 
++var ffjKeyImageLoaded = []byte("Loaded")
++
+ var ffjKeyImageFlags = []byte("flags")
+ 
+ // UnmarshalJSON umarshall json - template of ffjson
+@@ -271,6 +289,14 @@ mainparse:
+ 			} else {
+ 				switch kn[0] {
+ 
++				case 'L':
++
++					if bytes.Equal(ffjKeyImageLoaded, kn) {
++						currentKey = ffjtImageLoaded
++						state = fflib.FFParse_want_colon
++						goto mainparse
++					}
++
+ 				case 'b':
+ 
+ 					if bytes.Equal(ffjKeyImageBigDataNames, kn) {
+@@ -358,6 +384,12 @@ mainparse:
+ 					goto mainparse
+ 				}
+ 
++				if fflib.SimpleLetterEqualFold(ffjKeyImageLoaded, kn) {
++					currentKey = ffjtImageLoaded
++					state = fflib.FFParse_want_colon
++					goto mainparse
++				}
++
+ 				if fflib.SimpleLetterEqualFold(ffjKeyImageCreated, kn) {
+ 					currentKey = ffjtImageCreated
+ 					state = fflib.FFParse_want_colon
+@@ -465,6 +497,9 @@ mainparse:
+ 				case ffjtImageCreated:
+ 					goto handle_Created
+ 
++				case ffjtImageLoaded:
++					goto handle_Loaded
++
+ 				case ffjtImageFlags:
+ 					goto handle_Flags
+ 
+@@ -1047,6 +1082,31 @@ handle_Created:
+ 	state = fflib.FFParse_after_value
+ 	goto mainparse
+ 
++handle_Loaded:
++
++	/* handler: j.Loaded type=time.Time kind=struct quoted=false*/
++
++	{
++		if tok == fflib.FFTok_null {
++
++		} else {
++
++			tbuf, err := fs.CaptureField(tok)
++			if err != nil {
++				return fs.WrapErr(err)
++			}
++
++			err = j.Loaded.UnmarshalJSON(tbuf)
++			if err != nil {
++				return fs.WrapErr(err)
++			}
++		}
++		state = fflib.FFParse_after_value
++	}
++
++	state = fflib.FFParse_after_value
++	goto mainparse
++
+ handle_Flags:
+ 
+ 	/* handler: j.Flags type=map[string]interface {} kind=map quoted=false*/
+diff --git a/vendor/github.com/containers/storage/store.go b/vendor/github.com/containers/storage/store.go
+index a166799..b14af2d 100644
+--- a/vendor/github.com/containers/storage/store.go
++++ b/vendor/github.com/containers/storage/store.go
+@@ -210,6 +210,9 @@ type Store interface {
+ 	// the object directly.
+ 	SetMetadata(id, metadata string) error
+ 
++	// SetLoadedTime set the image pulled time
++	SetLoadedTime(id string, loaded time.Time) error
++
+ 	// Exists checks if there is a layer, image, or container which has the
+ 	// passed-in ID or name.
+ 	Exists(id string) bool
+@@ -335,6 +338,10 @@ type Store interface {
+ 	// Duplicate names are removed from the list automatically.
+ 	SetNames(id string, names []string) error
+ 
++	// AddName add the name for an image
++	// Duplicate names are removed from the list automatically.
++	AddName(id string, name string) error
++
+ 	// ListImageBigData retrieves a list of the (possibly large) chunks of
+ 	// named data associated with an image.
+ 	ListImageBigData(id string) ([]string, error)
+@@ -1269,6 +1276,41 @@ func (s *store) SetMetadata(id, metadata string) error {
+ 	return ErrNotAnID
+ }
+ 
++func (s *store) SetLoadedTime(id string, loaded time.Time) error {
++	ristore, err := s.ImageStore()
++	if err != nil {
++		return err
++	}
++
++	ristore.Lock()
++	defer ristore.Unlock()
++	if modified, err := ristore.Modified(); modified || err != nil {
++		ristore.Load()
++	}
++	if ristore.Exists(id) {
++		return ristore.SetLoadedTime(id, loaded)
++	}
++	return ErrNotAnID
++}
++
++
++func (s *store) AddName(id string, name string) error {
++	ristore, err := s.ImageStore()
++	if err != nil {
++		return err
++	}
++
++	ristore.Lock()
++	defer ristore.Unlock()
++	if modified, err := ristore.Modified(); modified || err != nil {
++		ristore.Load()
++	}
++	if ristore.Exists(id) {
++		return ristore.AddName(id, name)
++	}
++	return ErrNotAnID
++}
++
+ func (s *store) Metadata(id string) (string, error) {
+ 	lstore, err := s.LayerStore()
+ 	if err != nil {
+-- 
+2.22.0
+

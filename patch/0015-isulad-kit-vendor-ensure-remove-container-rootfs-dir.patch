@@ -1,0 +1,34 @@
+From 1c8b7d1bf17f1cd4fae28b533db9ef7909f55368 Mon Sep 17 00:00:00 2001
+From: WuJing <wujing50@huawei.com>
+Date: Mon, 13 May 2019 09:31:43 +0800
+Subject: [PATCH 15/30] isulad-kit-vendor: ensure remove container rootfs dir
+ when errmsg contain "File name too long"
+
+Signed-off-by: WuJing <wujing50@huawei.com>
+---
+ .../containers/storage/drivers/overlay/overlay.go        | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+index 62fd5ed..a63f0d1 100644
+--- a/vendor/github.com/containers/storage/drivers/overlay/overlay.go
++++ b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+@@ -695,7 +695,14 @@ func (d *Driver) Remove(id string) error {
+ 	}
+ 
+ 	if err := system.EnsureRemoveAll(dir); err != nil && !os.IsNotExist(err) {
+-		return err
++		if strings.Contains(err.Error(), "file name too long") {
++			cmd := exec.Command("rm", "-rf", dir)
++			if err := cmd.Run(); err != nil {
++				return err
++			}
++		} else {
++			return err
++		}
+ 	}
+ 	return nil
+ }
+-- 
+2.22.0
+

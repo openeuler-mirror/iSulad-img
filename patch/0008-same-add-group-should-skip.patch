@@ -1,0 +1,30 @@
+From b34712acf6fa3dffb6571142261784ef8b3c2206 Mon Sep 17 00:00:00 2001
+From: LiuHao <liuhao27@huawei.com>
+Date: Fri, 19 Apr 2019 17:15:29 +0800
+Subject: [PATCH 08/30] same add group should skip
+
+same add group should skip
+
+Signed-off-by: LiuHao <liuhao27@huawei.com>
+---
+ vendor/github.com/opencontainers/runc/libcontainer/user/user.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vendor/github.com/opencontainers/runc/libcontainer/user/user.go b/vendor/github.com/opencontainers/runc/libcontainer/user/user.go
+index 7b912bb..7bcd97c 100644
+--- a/vendor/github.com/opencontainers/runc/libcontainer/user/user.go
++++ b/vendor/github.com/opencontainers/runc/libcontainer/user/user.go
+@@ -458,9 +458,9 @@ func GetAdditionalGroups(additionalGroups []string, group io.Reader) ([]int, err
+ 			// if we found a matched group either by name or gid, take the
+ 			// first matched as correct
+ 			if g.Name == ag || strconv.Itoa(g.Gid) == ag {
++				found = true
+ 				if _, ok := gidMap[g.Gid]; !ok {
+ 					gidMap[g.Gid] = struct{}{}
+-					found = true
+ 					break
+ 				}
+ 			}
+-- 
+2.22.0
+

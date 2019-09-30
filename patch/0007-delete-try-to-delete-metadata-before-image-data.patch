@@ -1,0 +1,104 @@
+From 64ae7232ec2c3ffe5cd71e1cfd60bf8162d6e829 Mon Sep 17 00:00:00 2001
+From: LiFeng <lifeng68@huawei.com>
+Date: Thu, 18 Apr 2019 05:04:18 -0400
+Subject: [PATCH 07/30] delete: try to delete metadata before image data
+
+Signed-off-by: LiFeng <lifeng68@huawei.com>
+---
+ .../github.com/containers/storage/layers.go   | 67 +++++++++----------
+ 1 file changed, 33 insertions(+), 34 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index a6d90d3..0bb4b52 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -835,6 +835,7 @@ func (r *layerStore) tspath(id string) string {
+ }
+ 
+ func (r *layerStore) Delete(id string) error {
++	var err error
+ 	if !r.IsReadWrite() {
+ 		return errors.Wrapf(ErrStoreIsReadOnly, "not allowed to delete layers at %q", r.layerspath())
+ 	}
+@@ -850,46 +851,44 @@ func (r *layerStore) Delete(id string) error {
+ 			return err
+ 		}
+ 	}
+-	err := r.driver.Remove(id)
+-	if err == nil {
+-		os.Remove(r.tspath(id))
+-		delete(r.byid, id)
+-		r.idindex.Delete(id)
+-		mountLabel := layer.MountLabel
+-		if layer.MountPoint != "" {
+-			delete(r.bymount, layer.MountPoint)
++	os.Remove(r.tspath(id))
++	delete(r.byid, id)
++	r.idindex.Delete(id)
++	mountLabel := layer.MountLabel
++	if layer.MountPoint != "" {
++		delete(r.bymount, layer.MountPoint)
++	}
++	toDeleteIndex := -1
++	for i, candidate := range r.layers {
++		if candidate.ID == id {
++			toDeleteIndex = i
++			break
+ 		}
+-		toDeleteIndex := -1
+-		for i, candidate := range r.layers {
+-			if candidate.ID == id {
+-				toDeleteIndex = i
+-				break
+-			}
+-		}
+-		if toDeleteIndex != -1 {
+-			// delete the layer at toDeleteIndex
+-			if toDeleteIndex == len(r.layers)-1 {
+-				r.layers = r.layers[:len(r.layers)-1]
+-			} else {
+-				r.layers = append(r.layers[:toDeleteIndex], r.layers[toDeleteIndex+1:]...)
+-			}
++	}
++	if toDeleteIndex != -1 {
++		// delete the layer at toDeleteIndex
++		if toDeleteIndex == len(r.layers)-1 {
++			r.layers = r.layers[:len(r.layers)-1]
++		} else {
++			r.layers = append(r.layers[:toDeleteIndex], r.layers[toDeleteIndex+1:]...)
+ 		}
+-		if mountLabel != "" {
+-			var found bool
+-			for _, candidate := range r.layers {
+-				if candidate.MountLabel == mountLabel {
+-					found = true
+-					break
+-				}
+-			}
+-			if !found {
+-				label.ReleaseLabel(mountLabel)
++	}
++	if mountLabel != "" {
++		var found bool
++		for _, candidate := range r.layers {
++			if candidate.MountLabel == mountLabel {
++				found = true
++				break
+ 			}
+ 		}
+-		if err = r.Save(); err != nil {
+-			return err
++		if !found {
++			label.ReleaseLabel(mountLabel)
+ 		}
+ 	}
++	if err = r.Save(); err != nil {
++		return err
++	}
++	err = r.driver.Remove(id)
+ 	return err
+ }
+ 
+-- 
+2.22.0
+

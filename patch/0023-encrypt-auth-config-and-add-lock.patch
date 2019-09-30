@@ -1,0 +1,242 @@
+From 31a7eaa9b154cedbcf23899ccc31026c8a5e4005 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Tue, 18 Jun 2019 14:12:33 +0800
+Subject: [PATCH 23/30] encrypt auth config and add lock
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../containers/image/pkg/docker/aes/aes.go    | 116 ++++++++++++++++++
+ .../image/pkg/docker/config/config.go         |  62 ++++++++++
+ 2 files changed, 178 insertions(+)
+ create mode 100644 vendor/github.com/containers/image/pkg/docker/aes/aes.go
+
+diff --git a/vendor/github.com/containers/image/pkg/docker/aes/aes.go b/vendor/github.com/containers/image/pkg/docker/aes/aes.go
+new file mode 100644
+index 0000000..c4b89e1
+--- /dev/null
++++ b/vendor/github.com/containers/image/pkg/docker/aes/aes.go
+@@ -0,0 +1,116 @@
++// Copyright (c) Huawei Technologies Co., Ltd. 2018-2019. All rights reserved.
++// Description: AES Encrypt and Decrypt
++// Author: wangfengtu
++// Create: 2019-07-16
++
++package aes
++
++import (
++	"crypto/aes"
++	"crypto/cipher"
++	"crypto/rand"
++	"fmt"
++	"io/ioutil"
++	"os"
++	"path/filepath"
++)
++
++var KEY_AES []byte
++
++const (
++	// Use AES-256
++	keyLen           = 32
++	defaultAESKeyDir = "/root/.isulad"
++	aesKeyName       = "aeskey"
++)
++
++func genRandData(size int) ([]byte, error) {
++	buf := make([]byte, size)
++	_, err := rand.Read(buf)
++	if err != nil {
++		return nil, err
++	}
++	return buf, nil
++}
++
++// Init aes key, create key file if not exist
++func InitAESKey(dir string) error {
++	var filename string
++	var key []byte
++
++	if dir != "" {
++		filename = filepath.Join(dir, aesKeyName)
++	} else {
++		filename = filepath.Join(defaultAESKeyDir, aesKeyName)
++	}
++
++	if _, err := os.Stat(filename); err == nil {
++		if key, err = ioutil.ReadFile(filename); err != nil {
++			return fmt.Errorf("Read AES key failed: %v", err)
++		}
++		if len(key) != keyLen {
++			return fmt.Errorf("Invalid aes key length %v, it must be %v", len(key), keyLen)
++		}
++	} else if os.IsNotExist(err) {
++		// Create key file if not exist
++		key, err = genRandData(keyLen)
++		if err != nil {
++			return fmt.Errorf("Generate AES key failed: %v", err)
++		}
++		if err = ioutil.WriteFile(filename, key, 0600); err != nil {
++			return fmt.Errorf("Write key to file failed: %v", err)
++		}
++	} else {
++		return err
++	}
++
++	KEY_AES = key
++
++	return nil
++}
++
++// Encrypt data using CFB mode to be compatiable with docker
++func AESEncrypt(plainText, key []byte) ([]byte, error) {
++	if len(key) != keyLen {
++		return nil, fmt.Errorf("Invalid aes key length %v, it must be %v", len(key), keyLen)
++	}
++
++	block, err := aes.NewCipher(key)
++	if err != nil {
++		return nil, fmt.Errorf("Encrypt data failed: %v", err)
++	}
++
++	iv, err := genRandData(block.BlockSize())
++	if err != nil {
++		return nil, fmt.Errorf("Generate rand data for iv failed: %v", err)
++	}
++	encrypter := cipher.NewCFBEncrypter(block, iv)
++	encryptData := make([]byte, len(plainText))
++	encrypter.XORKeyStream(encryptData, plainText)
++
++	return append(iv, encryptData...), nil
++}
++
++// Decrypt data
++func AESDecrypt(secretText, key []byte) ([]byte, error) {
++	if len(key) != keyLen {
++		return nil, fmt.Errorf("Invalid aes key length %v, it must be %v", len(key), keyLen)
++	}
++
++	block, err := aes.NewCipher(key)
++	if err != nil {
++		return nil, fmt.Errorf("Decrypt data failed: %v", err)
++	}
++
++	if len(secretText) <= block.BlockSize() {
++		return nil, fmt.Errorf("Invalid secretText length %v, it must be larger then %v",
++			len(secretText), block.BlockSize)
++	}
++
++	iv := secretText[:block.BlockSize()]
++	decrypter := cipher.NewCFBDecrypter(block, iv)
++	decryptData := make([]byte, len(secretText)-block.BlockSize())
++	decrypter.XORKeyStream(decryptData, secretText[block.BlockSize():])
++
++	return decryptData, nil
++}
+diff --git a/vendor/github.com/containers/image/pkg/docker/config/config.go b/vendor/github.com/containers/image/pkg/docker/config/config.go
+index 1f57625..3033f12 100644
+--- a/vendor/github.com/containers/image/pkg/docker/config/config.go
++++ b/vendor/github.com/containers/image/pkg/docker/config/config.go
+@@ -9,7 +9,9 @@ import (
+ 	"path/filepath"
+ 	"strings"
+ 
++	"github.com/containers/image/pkg/docker/aes"
+ 	"github.com/containers/image/types"
++	"github.com/containers/storage/pkg/filelocker"
+ 	helperclient "github.com/docker/docker-credential-helpers/client"
+ 	"github.com/docker/docker-credential-helpers/credentials"
+ 	"github.com/docker/docker/pkg/homedir"
+@@ -158,6 +160,27 @@ func getPathToAuth(sys *types.SystemContext) (string, error) {
+ 	return fmt.Sprintf(defaultPerUIDPathFormat, os.Getuid()), nil
+ }
+ 
++func decryptAuths(dir string, auths *dockerConfigFile) error {
++	if err := aes.InitAESKey(dir); err != nil {
++		return err
++	}
++
++	for registry, authconfig := range auths.AuthConfigs {
++		data, err := base64.StdEncoding.DecodeString(authconfig.Auth)
++		if err != nil {
++			return err
++		}
++
++		auth, err := aes.AESDecrypt([]byte(data), aes.KEY_AES)
++		if err != nil {
++			return err
++		}
++		auths.AuthConfigs[registry] = dockerAuthConfig{Auth: string(auth)}
++	}
++
++	return nil
++}
++
+ // readJSONFile unmarshals the authentications stored in the auth.json file and returns it
+ // or returns an empty dockerConfigFile data structure if auth.json does not exist
+ // if the file exists and is empty, readJSONFile returns an error
+@@ -184,9 +207,36 @@ func readJSONFile(path string, legacyFormat bool) (dockerConfigFile, error) {
+ 		return dockerConfigFile{}, errors.Wrapf(err, "error unmarshaling JSON at %q", path)
+ 	}
+ 
++	err = decryptAuths(filepath.Dir(path), &auths)
++	if err != nil {
++		return dockerConfigFile{}, errors.Wrapf(err, "error decrypt auths %q", path)
++	}
++
+ 	return auths, nil
+ }
+ 
++func encryptAuths(dir string, auths *dockerConfigFile) error {
++	if err := aes.InitAESKey(dir); err != nil {
++		return err
++	}
++
++	for registry, authconfig := range auths.AuthConfigs {
++		auth, err := aes.AESEncrypt([]byte(authconfig.Auth), aes.KEY_AES)
++		if err != nil {
++			return err
++		}
++		auths.AuthConfigs[registry] = dockerAuthConfig{
++			Auth: base64.StdEncoding.EncodeToString(auth),
++		}
++	}
++
++	return nil
++}
++
++func authLockFile(path string) string {
++	return path + ".lock"
++}
++
+ // modifyJSON writes to auth.json if the dockerConfigFile has been updated
+ func modifyJSON(sys *types.SystemContext, editor func(auths *dockerConfigFile) (bool, error)) error {
+ 	path, err := getPathToAuth(sys)
+@@ -201,6 +251,14 @@ func modifyJSON(sys *types.SystemContext, editor func(auths *dockerConfigFile) (
+ 		}
+ 	}
+ 
++	lockfile, err := filelocker.GetLockfile(authLockFile(path))
++	if err != nil {
++		return err
++	}
++
++	lockfile.Lock()
++	defer lockfile.Unlock()
++
+ 	auths, err := readJSONFile(path, false)
+ 	if err != nil {
+ 		return errors.Wrapf(err, "error reading JSON file %q", path)
+@@ -211,6 +269,10 @@ func modifyJSON(sys *types.SystemContext, editor func(auths *dockerConfigFile) (
+ 		return errors.Wrapf(err, "error updating %q", path)
+ 	}
+ 	if updated {
++		err = encryptAuths(dir, &auths)
++		if err != nil {
++			return errors.Wrapf(err, "error encrypt auths %q", path)
++		}
+ 		newData, err := json.MarshalIndent(auths, "", "\t")
+ 		if err != nil {
+ 			return errors.Wrapf(err, "error marshaling JSON %q", path)
+-- 
+2.22.0
+

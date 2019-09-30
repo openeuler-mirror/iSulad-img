@@ -1,0 +1,26 @@
+From 9a0a8e0d68a7f8816a9ce35fdabe036a063d214f Mon Sep 17 00:00:00 2001
+From: LiFeng <lifeng68@huawei.com>
+Date: Mon, 10 Jun 2019 09:41:44 -0400
+Subject: [PATCH 22/30] set layer MountCount = 0 without mount point file
+
+Signed-off-by: LiFeng <lifeng68@huawei.com>
+---
+ vendor/github.com/containers/storage/layers.go | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index b50dac7..56084fa 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -415,6 +415,8 @@ func (r *layerStore) LoadLayerMountPoint(layer *Layer) error {
+ 	mdata, err := ioutil.ReadFile(mpath)
+ 	if err != nil {
+ 		if os.IsNotExist(err) {
++			layer.MountPoint = ""
++			layer.MountCount = 0
+ 			return nil
+ 		}
+ 		return err
+-- 
+2.22.0
+

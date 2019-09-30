@@ -1,0 +1,89 @@
+From 02400a6937efd0c33ee783d7b787d2d1fc026cd8 Mon Sep 17 00:00:00 2001
+From: TanYiFeng <tanyifeng1@huawei.com>
+Date: Tue, 16 Apr 2019 00:44:20 -0400
+Subject: [PATCH 05/30] isulad-kit-vendor: fix parseSize of float accurancy
+
+Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
+---
+ vendor/github.com/docker/go-units/size.go | 39 +++++++++++++++++------
+ 1 file changed, 30 insertions(+), 9 deletions(-)
+
+diff --git a/vendor/github.com/docker/go-units/size.go b/vendor/github.com/docker/go-units/size.go
+index 2b47b66..c7e425f 100644
+--- a/vendor/github.com/docker/go-units/size.go
++++ b/vendor/github.com/docker/go-units/size.go
+@@ -5,6 +5,7 @@ import (
+ 	"regexp"
+ 	"strconv"
+ 	"strings"
++	"math"
+ )
+ 
+ // See: http://en.wikipedia.org/wiki/Binary_prefix
+@@ -31,7 +32,7 @@ type unitMap map[string]int64
+ var (
+ 	decimalMap = unitMap{"k": KB, "m": MB, "g": GB, "t": TB, "p": PB}
+ 	binaryMap  = unitMap{"k": KiB, "m": MiB, "g": GiB, "t": TiB, "p": PiB}
+-	sizeRegex  = regexp.MustCompile(`^(\d+(\.\d+)*) ?([kKmMgGtTpP])?[iI]?[bB]?$`)
++	sizeRegex  = regexp.MustCompile(`^((\d+)(\.\d+)*) ?([kKmMgGtTpP])?[iI]?[bB]?$`)
+ )
+ 
+ var decimapAbbrs = []string{"B", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"}
+@@ -87,26 +88,46 @@ func RAMInBytes(size string) (int64, error) {
+ 	return parseSize(size, binaryMap)
+ }
+ 
++func newErrRange(sizeStr string) error {
++	return fmt.Errorf("%s converted to int64 overflowed!", sizeStr)
++}
++
+ // Parses the human-readable size string into the amount it represents.
+ func parseSize(sizeStr string, uMap unitMap) (int64, error) {
+ 	matches := sizeRegex.FindStringSubmatch(sizeStr)
+-	if len(matches) != 4 {
++	if len(matches) != 5 {
+ 		return -1, fmt.Errorf("invalid size: '%s'", sizeStr)
+ 	}
+ 
+-	size, err := strconv.ParseFloat(matches[1], 64)
++	var mul int64 = 1
++	unitPrefix := strings.ToLower(matches[4])
++	if m, ok := uMap[unitPrefix]; ok {
++		mul = m
++	}
++
++	intSize, err := strconv.ParseInt(matches[2], 10, 64)
+ 	if err != nil {
+ 		return -1, err
+ 	}
+ 
+-	unitPrefix := strings.ToLower(matches[3])
+-	if mul, ok := uMap[unitPrefix]; ok {
+-		size *= float64(mul)
++	var floatSize int64 = 0
++	if matches[3] != "" {
++		floatStr := fmt.Sprintf("0%s", matches[3])
++		floatRes, err := strconv.ParseFloat(floatStr, 64)
++		if err != nil {
++			return -1, err
++		}
++		floatSize = int64(floatRes * float64(mul))
++	}
++
++	if math.MaxInt64 / mul < intSize {
++		return -1, newErrRange(sizeStr)
+ 	}
++	intSize = intSize * mul
+ 
+-	if int64(size) < 0 {
+-		return -1, fmt.Errorf("%s converted to int64 overflowed!", sizeStr)
++	if math.MaxInt64 - intSize < floatSize {
++		return -1, newErrRange(sizeStr)
+ 	}
+ 
+-	return int64(size), nil
++	return intSize + floatSize, nil
+ }
+-- 
+2.22.0
+

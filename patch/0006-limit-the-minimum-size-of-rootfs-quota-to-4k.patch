@@ -1,0 +1,29 @@
+From 98d0c5b7880a9aef438f0b88c3a1f2620dd06402 Mon Sep 17 00:00:00 2001
+From: TanYiFeng <tanyifeng1@huawei.com>
+Date: Tue, 16 Apr 2019 10:53:52 -0400
+Subject: [PATCH 06/30] limit the minimum size of rootfs quota to 4k
+
+Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
+---
+ .../github.com/containers/storage/drivers/overlay/overlay.go | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+index 26467d1..62fd5ed 100644
+--- a/vendor/github.com/containers/storage/drivers/overlay/overlay.go
++++ b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+@@ -579,8 +579,9 @@ func (d *Driver) parseStorageOpt(storageOpt map[string]string, driver *Driver) e
+ 				return fmt.Errorf("Illegal storage size(%s): numerical result out of range", val)
+ 			}
+ 			// for overlay (0-1024) means no limit
+-			if size < 1024 && size > 0 {
+-				return fmt.Errorf("Illegal storage size:%d, 1024 at least", size)
++			// size lower than 4k may cause unusual display by command `df -h` in container
++			if size < 4096 && size > 0 {
++				return fmt.Errorf("Illegal storage size:%d, 4096 at least", size)
+ 			}
+ 			driver.options.quota.Size = uint64(size)
+ 		default:
+-- 
+2.22.0
+

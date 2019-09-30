@@ -1,0 +1,468 @@
+From 298e21d90af3e691fd862a26f99d80b615c996fc Mon Sep 17 00:00:00 2001
+From: TanYiFeng <tanyifeng1@huawei.com>
+Date: Tue, 9 Apr 2019 01:32:27 -0400
+Subject: [PATCH 03/30] vendor: support setting rootfs quota
+
+Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
+---
+ .../storage/drivers/overlay/overlay.go        |  42 ++++-
+ .../storage/drivers/quota/projectquota.go     | 173 ++++++++++++++++--
+ vendor/github.com/containers/storage/store.go |   9 +-
+ vendor/github.com/docker/go-units/size.go     |  10 +-
+ 4 files changed, 199 insertions(+), 35 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+index 6b7e67f..5561658 100644
+--- a/vendor/github.com/containers/storage/drivers/overlay/overlay.go
++++ b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+@@ -87,6 +87,7 @@ type overlayOptions struct {
+ 	overrideKernelCheck bool
+ 	imageStores         []string
+ 	quota               quota.Quota
++	quotaBaseSize       uint64
+ 	mountProgram        string
+ 	ostreeRepo          string
+ 	skipMountHome       bool
+@@ -195,16 +196,17 @@ func Init(home string, options []string, uidMaps, gidMaps []idtools.IDMap) (grap
+ 
+ 	d.naiveDiff = graphdriver.NewNaiveDiffDriver(d, d)
+ 
+-	if backingFs == "xfs" {
+-		// Try to enable project quota support over xfs.
+-		if d.quotaCtl, err = quota.NewControl(home); err == nil {
++	if backingFs == "xfs" || backingFs == "extfs" {
++		// Try to enable project quota support over xfs and extfs.
++		if d.quotaCtl, err = quota.NewControl(home, backingFs); err == nil {
+ 			projectQuotaSupported = true
++			d.options.quotaBaseSize = opts.quotaBaseSize
+ 		} else if opts.quota.Size > 0 {
+ 			return nil, fmt.Errorf("Storage option overlay.size not supported. Filesystem does not support Project Quota: %v", err)
+ 		}
+ 	} else if opts.quota.Size > 0 {
+ 		// if xfs is not the backing fs then error out if the storage-opt overlay.size is used.
+-		return nil, fmt.Errorf("Storage option overlay.size only supported for backingFS XFS. Found %v", backingFs)
++		return nil, fmt.Errorf("Storage option overlay.size only supported for backingFS XFS or ext4. Found %v", backingFs)
+ 	}
+ 
+ 	go d.cleanupLinkDir()
+@@ -248,13 +250,13 @@ func parseOptions(options []string) (*overlayOptions, error) {
+ 			}
+ 		case ".mountopt", "overlay.mountopt", "overlay2.mountopt":
+ 			o.mountOptions = val
+-		case ".size", "overlay.size", "overlay2.size":
++		case ".size", "overlay.size", "overlay2.size", "overlay.basesize", "overlay2.basesize":
+ 			logrus.Debugf("overlay: size=%s", val)
+ 			size, err := units.RAMInBytes(val)
+ 			if err != nil {
+ 				return nil, err
+ 			}
+-			o.quota.Size = uint64(size)
++			o.quotaBaseSize = uint64(size)
+ 		case ".imagestore", "overlay.imagestore", "overlay2.imagestore":
+ 			logrus.Debugf("overlay: imagestore=%s", val)
+ 			// Additional read only image stores to use for lower paths
+@@ -422,7 +424,7 @@ func (d *Driver) Cleanup() error {
+ // file system.
+ func (d *Driver) CreateReadWrite(id, parent string, opts *graphdriver.CreateOpts) error {
+ 	if opts != nil && len(opts.StorageOpt) != 0 && !projectQuotaSupported {
+-		return fmt.Errorf("--storage-opt is supported only for overlay over xfs with 'pquota' mount option")
++		return fmt.Errorf("--storage-opt is supported only for overlay over xfs or ext4 with 'pquota' mount option")
+ 	}
+ 
+ 	if opts == nil {
+@@ -486,15 +488,27 @@ func (d *Driver) create(id, parent string, opts *graphdriver.CreateOpts) (retErr
+ 		}
+ 	}()
+ 
+-	if opts != nil && len(opts.StorageOpt) > 0 {
++	if opts != nil && (len(opts.StorageOpt) > 0 || d.options.quotaBaseSize > 0) {
+ 		driver := &Driver{}
+ 		if err := d.parseStorageOpt(opts.StorageOpt, driver); err != nil {
+ 			return err
+ 		}
++		if driver.options.quota.Size == 0 && d.options.quotaBaseSize > 0 {
++			driver.options.quota.Size = d.options.quotaBaseSize
++		}
+ 
+ 		if driver.options.quota.Size > 0 {
+-			// Set container disk quota limit
+-			if err := d.quotaCtl.SetQuota(dir, driver.options.quota); err != nil {
++			if d.quotaCtl != nil {
++				// Set container disk quota limit
++				if err := d.quotaCtl.SetQuota(dir, driver.options.quota); err != nil {
++					return err
++				}
++			}
++		}
++	} else if d.options.quota.Size > 0 {
++		if d.quotaCtl != nil {
++			// storage-opt not specified quota size, but graphdriver-options does, so limits it also
++			if err := d.quotaCtl.SetQuota(dir, d.options.quota); err != nil {
+ 				return err
+ 			}
+ 		}
+@@ -550,6 +564,14 @@ func (d *Driver) parseStorageOpt(storageOpt map[string]string, driver *Driver) e
+ 			if err != nil {
+ 				return err
+ 			}
++			// deal with negative and super large number
++			if size < 0 {
++				return fmt.Errorf("Illegal storage size(%s): numerical result out of range", val)
++			}
++			// for overlay (0-1024) means no limit
++			if size < 1024 && size > 0 {
++				return fmt.Errorf("Illegal storage size:%d, 1024 at least", size)
++			}
+ 			driver.options.quota.Size = uint64(size)
+ 		default:
+ 			return fmt.Errorf("Unknown option %s", key)
+diff --git a/vendor/github.com/containers/storage/drivers/quota/projectquota.go b/vendor/github.com/containers/storage/drivers/quota/projectquota.go
+index 93e7443..844e02a 100644
+--- a/vendor/github.com/containers/storage/drivers/quota/projectquota.go
++++ b/vendor/github.com/containers/storage/drivers/quota/projectquota.go
+@@ -38,8 +38,8 @@ struct fsxattr {
+ #ifndef PRJQUOTA
+ #define PRJQUOTA	2
+ #endif
+-#ifndef XFS_PROJ_QUOTA
+-#define XFS_PROJ_QUOTA	2
++#ifndef PROJ_QUOTA
++#define PROJ_QUOTA	2
+ #endif
+ #ifndef Q_XSETPQLIM
+ #define Q_XSETPQLIM QCMD(Q_XSETQLIM, PRJQUOTA)
+@@ -47,6 +47,28 @@ struct fsxattr {
+ #ifndef Q_XGETPQUOTA
+ #define Q_XGETPQUOTA QCMD(Q_XGETQUOTA, PRJQUOTA)
+ #endif
++
++#ifndef Q_XGETPQSTAT
++#define Q_XGETPQSTAT QCMD(Q_XGETQSTAT, PRJQUOTA)
++#endif
++
++#ifndef Q_SETPQUOTA
++#define Q_SETPQUOTA (unsigned int)QCMD(Q_SETQUOTA, PRJQUOTA)
++#endif
++
++#ifndef Q_GETPQUOTA
++#define Q_GETPQUOTA (unsigned int)QCMD(Q_GETQUOTA, PRJQUOTA)
++#endif
++
++#define PDQ_ACCT_BIT 4
++#define PDQ_ENFD_BIT 5
++
++#ifndef QUOTA_PDQ_ACCT
++#define QUOTA_PDQ_ACCT (1<<PDQ_ACCT_BIT)
++#endif
++#ifndef QUOTA_PDQ_ENFD
++#define QUOTA_PDQ_ENFD (1<<PDQ_ENFD_BIT)
++#endif
+ */
+ import "C"
+ import (
+@@ -54,6 +76,7 @@ import (
+ 	"io/ioutil"
+ 	"path"
+ 	"path/filepath"
++	"sync"
+ 	"unsafe"
+ 
+ 	"github.com/sirupsen/logrus"
+@@ -71,6 +94,17 @@ type Control struct {
+ 	backingFsBlockDev string
+ 	nextProjectID     uint32
+ 	quotas            map[string]uint32
++	quotaOps          QuotafileOps
++	lock              sync.Mutex
++}
++
++// QuotafileOps is a interface for quotafile operations
++type QuotafileOps interface {
++	// SetProjectQuota sets the project quota for project id on block device
++	SetProjectQuota(dev string, projectID uint32, quota Quota) error
++
++	// GetProjectQuota gets the project quota for project id on block device
++	GetProjectQuota(dev string, projectID uint32, quota *Quota) error
+ }
+ 
+ // NewControl - initialize project quota support.
+@@ -95,7 +129,7 @@ type Control struct {
+ // on it. If that works, continue to scan existing containers to map allocated
+ // project ids.
+ //
+-func NewControl(basePath string) (*Control, error) {
++func NewControl(basePath string, fs string) (*Control, error) {
+ 	//
+ 	// Get project id of parent dir as minimal id to be used by driver
+ 	//
+@@ -120,7 +154,27 @@ func NewControl(basePath string) (*Control, error) {
+ 	quota := Quota{
+ 		Size: 0,
+ 	}
+-	if err := setProjectQuota(backingFsBlockDev, minProjectID, quota); err != nil {
++	//
++	// Get the quota stat to check whether the system support project quota
++	//
++	stat, err := getQuotaStat(backingFsBlockDev)
++	if err != nil || stat != 2 {
++		if err != nil {
++			logrus.Debugf("Get quota stat failed with: %v", err)
++		}
++		return nil, fmt.Errorf("quota isn't supported on your system")
++	}
++
++	var quotaOps QuotafileOps
++
++	if fs == "xfs" {
++		quotaOps = new(XfsQuota)
++	} else if fs == "extfs" {
++		quotaOps = new(Ext4Quota)
++	} else {
++		return nil, fmt.Errorf("quota isn't supported for filesystem %q", fs)
++	}
++	if err := quotaOps.SetProjectQuota(backingFsBlockDev, minProjectID, quota); err != nil {
+ 		return nil, err
+ 	}
+ 
+@@ -128,6 +182,7 @@ func NewControl(basePath string) (*Control, error) {
+ 		backingFsBlockDev: backingFsBlockDev,
+ 		nextProjectID:     minProjectID + 1,
+ 		quotas:            make(map[string]uint32),
++		quotaOps:          quotaOps,
+ 	}
+ 
+ 	//
+@@ -146,6 +201,7 @@ func NewControl(basePath string) (*Control, error) {
+ // for that project id
+ func (q *Control) SetQuota(targetPath string, quota Quota) error {
+ 
++	q.lock.Lock()
+ 	projectID, ok := q.quotas[targetPath]
+ 	if !ok {
+ 		projectID = q.nextProjectID
+@@ -155,26 +211,32 @@ func (q *Control) SetQuota(targetPath string, quota Quota) error {
+ 		//
+ 		err := setProjectID(targetPath, projectID)
+ 		if err != nil {
++			q.lock.Unlock()
+ 			return err
+ 		}
+ 
+ 		q.quotas[targetPath] = projectID
+ 		q.nextProjectID++
+ 	}
++	q.lock.Unlock()
+ 
+ 	//
+ 	// set the quota limit for the container's project id
+ 	//
+ 	logrus.Debugf("SetQuota(%s, %d): projectID=%d", targetPath, quota.Size, projectID)
+-	return setProjectQuota(q.backingFsBlockDev, projectID, quota)
++	return q.quotaOps.SetProjectQuota(q.backingFsBlockDev, projectID, quota)
++}
++
++// XfsQuota is a struct implements quota operations
++type XfsQuota struct {
+ }
+ 
+-// setProjectQuota - set the quota for project id on xfs block device
+-func setProjectQuota(backingFsBlockDev string, projectID uint32, quota Quota) error {
++// SetProjectQuota - set the quota for project id on xfs block device
++func (q *XfsQuota) SetProjectQuota(backingFsBlockDev string, projectID uint32, quota Quota) error {
+ 	var d C.fs_disk_quota_t
+ 	d.d_version = C.FS_DQUOT_VERSION
+ 	d.d_id = C.__u32(projectID)
+-	d.d_flags = C.XFS_PROJ_QUOTA
++	d.d_flags = C.PROJ_QUOTA
+ 
+ 	d.d_fieldmask = C.FS_DQ_BHARD | C.FS_DQ_BSOFT
+ 	d.d_blk_hardlimit = C.__u64(quota.Size / 512)
+@@ -194,20 +256,12 @@ func setProjectQuota(backingFsBlockDev string, projectID uint32, quota Quota) er
+ 	return nil
+ }
+ 
+-// GetQuota - get the quota limits of a directory that was configured with SetQuota
+-func (q *Control) GetQuota(targetPath string, quota *Quota) error {
++// GetProjectQuota gets the project quota for projectID on dev
++func (q *XfsQuota) GetProjectQuota(backingFsBlockDev string, projectID uint32, quota *Quota) error {
+ 
+-	projectID, ok := q.quotas[targetPath]
+-	if !ok {
+-		return fmt.Errorf("quota not found for path : %s", targetPath)
+-	}
+-
+-	//
+-	// get the quota limit for the container's project id
+-	//
+ 	var d C.fs_disk_quota_t
+ 
+-	var cs = C.CString(q.backingFsBlockDev)
++	var cs = C.CString(backingFsBlockDev)
+ 	defer C.free(unsafe.Pointer(cs))
+ 
+ 	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, C.Q_XGETPQUOTA,
+@@ -215,13 +269,92 @@ func (q *Control) GetQuota(targetPath string, quota *Quota) error {
+ 		uintptr(unsafe.Pointer(&d)), 0, 0)
+ 	if errno != 0 {
+ 		return fmt.Errorf("Failed to get quota limit for projid %d on %s: %v",
+-			projectID, q.backingFsBlockDev, errno.Error())
++			projectID, backingFsBlockDev, errno.Error())
+ 	}
+ 	quota.Size = uint64(d.d_blk_hardlimit) * 512
+ 
+ 	return nil
+ }
+ 
++// Ext4Quota is a struct implements quota operations
++type Ext4Quota struct {
++}
++
++// SetProjectQuota - set the quota for project id on ext4 block device
++func (q *Ext4Quota) SetProjectQuota(backingFsBlockDev string, projectID uint32, quota Quota) error {
++	var d C.struct_if_dqblk
++	d.dqb_bhardlimit = C.__u64(quota.Size / 1024)
++	d.dqb_bsoftlimit = d.dqb_bhardlimit
++	d.dqb_valid = C.QIF_LIMITS
++
++	var cs = C.CString(backingFsBlockDev)
++	defer C.free(unsafe.Pointer(cs))
++
++	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, C.Q_SETPQUOTA,
++		uintptr(unsafe.Pointer(cs)), uintptr(C.__u32(projectID)),
++		uintptr(unsafe.Pointer(&d)), 0, 0)
++	if errno != 0 {
++		return fmt.Errorf("Failed to set quota limit for projid %d on %s: %v",
++			projectID, backingFsBlockDev, errno.Error())
++	}
++
++	return nil
++}
++
++func (q *Ext4Quota) GetProjectQuota(backingFsBlockDev string, projectID uint32, quota *Quota) error {
++	var d C.struct_if_dqblk
++	d.dqb_valid = C.QIF_USAGE
++
++	var cs = C.CString(backingFsBlockDev)
++	defer C.free(unsafe.Pointer(cs))
++
++	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, C.Q_SETPQUOTA,
++		uintptr(unsafe.Pointer(cs)), uintptr(C.__u32(projectID)),
++		uintptr(unsafe.Pointer(&d)), 0, 0)
++	if errno != 0 {
++		return fmt.Errorf("Failed to get quota limit for projid %d on %s: %v",
++			projectID, backingFsBlockDev, errno.Error())
++	}
++
++	quota.Size = uint64(d.dqb_bhardlimit) * 1024
++
++	return nil
++}
++
++// getQuotaStat - get the quota stat
++// return 2 means quota is on
++func getQuotaStat(backingFsBlockDev string) (int, error) {
++	var info C.fs_quota_stat_t
++
++	var cs = C.CString(backingFsBlockDev)
++	defer C.free(unsafe.Pointer(cs))
++	_, _, errno := unix.Syscall6(unix.SYS_QUOTACTL, C.Q_XGETPQSTAT,
++		uintptr(unsafe.Pointer(cs)), 0,
++		uintptr(unsafe.Pointer(&info)), 0, 0)
++	if errno != 0 {
++		return -1, fmt.Errorf("Failed to get quota stat on %s: %v",
++			backingFsBlockDev, errno.Error())
++	}
++
++	return int((info.qs_flags&C.QUOTA_PDQ_ACCT)>>C.PDQ_ACCT_BIT + (info.qs_flags&C.QUOTA_PDQ_ENFD)>>C.PDQ_ENFD_BIT), nil
++}
++
++// GetQuota - get the quota limits of a directory that was configured with SetQuota
++func (q *Control) GetQuota(targetPath string, quota *Quota) error {
++	q.lock.Lock()
++	projectID, ok := q.quotas[targetPath]
++	q.lock.Unlock()
++	if !ok {
++		return fmt.Errorf("quota not found for path : %s", targetPath)
++	}
++
++	//
++	// get the quota limit for the container's project id
++	//
++
++	return q.quotaOps.GetProjectQuota(q.backingFsBlockDev, projectID, quota)
++}
++
+ // getProjectID - get the project id of path on xfs
+ func getProjectID(targetPath string) (uint32, error) {
+ 	dir, err := openDir(targetPath)
+diff --git a/vendor/github.com/containers/storage/store.go b/vendor/github.com/containers/storage/store.go
+index b177cb4..df4205f 100644
+--- a/vendor/github.com/containers/storage/store.go
++++ b/vendor/github.com/containers/storage/store.go
+@@ -15,7 +15,6 @@ import (
+ 
+ 	// register all of the built-in drivers
+ 	_ "github.com/containers/storage/drivers/register"
+-
+ 	"github.com/BurntSushi/toml"
+ 	drivers "github.com/containers/storage/drivers"
+ 	"github.com/containers/storage/pkg/archive"
+@@ -1218,7 +1217,13 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
+ 		options.Flags["MountLabel"] = mountLabel
+ 	}
+ 
+-	clayer, err := rlstore.Create(layer, imageTopLayer, nil, options.Flags["MountLabel"].(string), nil, layerOptions, true)
++	storageOpts := make(map[string]string)
++	storageOptions, _ := options.Flags["StorageOpts"]
++	if storageOptions != nil {
++		storageOpts = storageOptions.(map[string]string)
++	}
++
++	clayer, err := rlstore.Create(layer, imageTopLayer, nil, options.Flags["MountLabel"].(string), storageOpts, layerOptions, true)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/vendor/github.com/docker/go-units/size.go b/vendor/github.com/docker/go-units/size.go
+index b6485ed..2b47b66 100644
+--- a/vendor/github.com/docker/go-units/size.go
++++ b/vendor/github.com/docker/go-units/size.go
+@@ -31,7 +31,7 @@ type unitMap map[string]int64
+ var (
+ 	decimalMap = unitMap{"k": KB, "m": MB, "g": GB, "t": TB, "p": PB}
+ 	binaryMap  = unitMap{"k": KiB, "m": MiB, "g": GiB, "t": TiB, "p": PiB}
+-	sizeRegex  = regexp.MustCompile(`^(\d+(\.\d+)*) ?([kKmMgGtTpP])?[bB]?$`)
++	sizeRegex  = regexp.MustCompile(`^(\d+(\.\d+)*) ?([kKmMgGtTpP])?[iI]?[bB]?$`)
+ )
+ 
+ var decimapAbbrs = []string{"B", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"}
+@@ -58,7 +58,7 @@ func CustomSize(format string, size float64, base float64, _map []string) string
+ // instead of 4 digit precision used in units.HumanSize.
+ func HumanSizeWithPrecision(size float64, precision int) string {
+ 	size, unit := getSizeAndUnit(size, 1000.0, decimapAbbrs)
+-	return fmt.Sprintf("%.*g %s", precision, size, unit)
++	return fmt.Sprintf("%.*g%s", precision, size, unit)
+ }
+ 
+ // HumanSize returns a human-readable approximation of a size
+@@ -70,7 +70,7 @@ func HumanSize(size float64) string {
+ // BytesSize returns a human-readable size in bytes, kibibytes,
+ // mebibytes, gibibytes, or tebibytes (eg. "44kiB", "17MiB").
+ func BytesSize(size float64) string {
+-	return CustomSize("%.4g %s", size, 1024.0, binaryAbbrs)
++	return CustomSize("%.4g%s", size, 1024.0, binaryAbbrs)
+ }
+ 
+ // FromHumanSize returns an integer from a human-readable specification of a
+@@ -104,5 +104,9 @@ func parseSize(sizeStr string, uMap unitMap) (int64, error) {
+ 		size *= float64(mul)
+ 	}
+ 
++	if int64(size) < 0 {
++		return -1, fmt.Errorf("%s converted to int64 overflowed!", sizeStr)
++	}
++
+ 	return int64(size), nil
+ }
+-- 
+2.22.0
+

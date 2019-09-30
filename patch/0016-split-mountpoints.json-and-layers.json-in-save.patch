@@ -1,0 +1,106 @@
+From e2500aa3a648a308055d57f8c9f59d3126846aa7 Mon Sep 17 00:00:00 2001
+From: LiFeng <lifeng68@huawei.com>
+Date: Mon, 13 May 2019 04:58:15 -0400
+Subject: [PATCH 16/30] split mountpoints.json and layers.json in save
+
+Signed-off-by: LiFeng <lifeng68@huawei.com>
+---
+ .../github.com/containers/storage/layers.go   | 46 ++++++++++++++++---
+ 1 file changed, 39 insertions(+), 7 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index b805e9a..9022e6e 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -431,6 +431,36 @@ func (r *layerStore) Save() error {
+ 	return ioutils.AtomicWriteFile(mpath, jmdata, 0600)
+ }
+ 
++func (r *layerStore) SaveMount() error {
++	if !r.IsReadWrite() {
++		return errors.Wrapf(ErrStoreIsReadOnly, "not allowed to modify the layer store at %q", r.layerspath())
++	}
++	if !r.Locked() {
++		return errors.New("layer store is not locked")
++	}
++
++	mpath := r.mountspath()
++	if err := os.MkdirAll(filepath.Dir(mpath), 0700); err != nil {
++		return err
++	}
++	mounts := make([]layerMountPoint, 0, len(r.layers))
++	for _, layer := range r.layers {
++		if layer.MountPoint != "" && layer.MountCount > 0 {
++			mounts = append(mounts, layerMountPoint{
++				ID:         layer.ID,
++				MountPoint: layer.MountPoint,
++				MountCount: layer.MountCount,
++			})
++		}
++	}
++	jmdata, err := json.Marshal(&mounts)
++	if err != nil {
++		return err
++	}
++	defer r.Touch()
++	return ioutils.AtomicWriteFile(mpath, jmdata, 0600)
++}
++
+ func newLayerStore(readonly bool, rundir string, layerdir string, driver drivers.Driver, uidMap, gidMap []idtools.IDMap) (LayerStore, error) {
+ 	if !readonly {
+ 		if err := os.MkdirAll(rundir, 0700); err != nil {
+@@ -716,7 +746,7 @@ func (r *layerStore) Mount(id string, options drivers.MountOpts) (string, error)
+ 	if layer.MountCount > 0 {
+ 		if mounted, err := mount.Mounted(layer.MountPoint); mounted && err == nil {
+ 			layer.MountCount++
+-			return layer.MountPoint, r.Save()
++			return layer.MountPoint, r.SaveMount()
+ 		}
+ 	}
+ 	if options.MountLabel == "" {
+@@ -736,7 +766,7 @@ func (r *layerStore) Mount(id string, options drivers.MountOpts) (string, error)
+ 		layer.MountPoint = filepath.Clean(mountpoint)
+ 		layer.MountCount++
+ 		r.bymount[layer.MountPoint] = layer
+-		err = r.Save()
++		err = r.SaveMount()
+ 	}
+ 	return mountpoint, err
+ }
+@@ -758,7 +788,7 @@ func (r *layerStore) Unmount(id string, force bool) (bool, error) {
+ 	}
+ 	if layer.MountCount > 1 {
+ 		layer.MountCount--
+-		return true, r.Save()
++		return true, r.SaveMount()
+ 	}
+ 	err := r.driver.Put(id)
+ 	if err == nil || os.IsNotExist(err) {
+@@ -767,7 +797,7 @@ func (r *layerStore) Unmount(id string, force bool) (bool, error) {
+ 		}
+ 		layer.MountCount--
+ 		layer.MountPoint = ""
+-		return false, r.Save()
++		return false, r.SaveMount()
+ 	}
+ 	return true, err
+ }
+@@ -931,10 +961,12 @@ func (r *layerStore) Delete(id string) error {
+ 			label.ReleaseLabel(mountLabel)
+ 		}
+ 	}
+-	if err = r.Save(); err != nil {
+-		return err
+-	}
+ 	err = r.driver.Remove(id)
++	if save_err := r.Save(); save_err != nil {
++		if err == nil {
++			err = save_err
++		}
++	}
+ 	return err
+ }
+ 
+-- 
+2.22.0
+

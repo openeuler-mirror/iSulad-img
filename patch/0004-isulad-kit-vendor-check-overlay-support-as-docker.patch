@@ -1,0 +1,96 @@
+From 7335fbc4bba8f4fc3e655c4f4978d95eabbaa16c Mon Sep 17 00:00:00 2001
+From: TanYiFeng <tanyifeng1@huawei.com>
+Date: Tue, 9 Apr 2019 12:19:49 -0400
+Subject: [PATCH 04/30] isulad-kit-vendor: check overlay support as docker
+
+we may got failed if always detect multi lower layer mount,
+when writed data more than rootfs quota for arm machine
+
+Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
+---
+ .../storage/drivers/overlay/overlay.go        | 42 ++++++++++++-------
+ 1 file changed, 26 insertions(+), 16 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+index 5561658..26467d1 100644
+--- a/vendor/github.com/containers/storage/drivers/overlay/overlay.go
++++ b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+@@ -34,6 +34,7 @@ import (
+ 	"github.com/pkg/errors"
+ 	"github.com/sirupsen/logrus"
+ 	"golang.org/x/sys/unix"
++	"bufio"
+ )
+ 
+ var (
+@@ -131,6 +132,10 @@ func Init(home string, options []string, uidMaps, gidMaps []idtools.IDMap) (grap
+ 		return nil, err
+ 	}
+ 
++	if err := supportsOverlay(); err != nil {
++		return nil, graphdriver.ErrNotSupported
++	}
++
+ 	fsMagic, err := graphdriver.GetFSMagic(home)
+ 	if err != nil {
+ 		return nil, err
+@@ -162,11 +167,11 @@ func Init(home string, options []string, uidMaps, gidMaps []idtools.IDMap) (grap
+ 	if opts.mountProgram != "" {
+ 		supportsDType = true
+ 	} else {
+-		supportsDType, err = supportsOverlay(home, fsMagic, rootUID, rootGID)
+-		if err != nil {
++		supportsDType, err = fsutils.SupportsDType(home)
++		if !supportsDType {
+ 			os.Remove(filepath.Join(home, linkDir))
+ 			os.Remove(home)
+-			return nil, errors.Wrap(err, "kernel does not support overlay fs")
++			return nil, overlayutils.ErrDTypeNotSupported("overlay", backingFs)
+ 		}
+ 	}
+ 
+@@ -300,23 +305,28 @@ func parseOptions(options []string) (*overlayOptions, error) {
+ 	return o, nil
+ }
+ 
+-func supportsOverlay(home string, homeMagic graphdriver.FsMagic, rootUID, rootGID int) (supportsDType bool, err error) {
+-	// We can try to modprobe overlay first
+-
++func supportsOverlay() error {
+ 	exec.Command("modprobe", "overlay").Run()
+ 
+-	layerDir, err := ioutil.TempDir(home, "compat")
+-	if err == nil {
+-		// Check if reading the directory's contents populates the d_type field, which is required
+-		// for proper operation of the overlay filesystem.
+-		supportsDType, err = fsutils.SupportsDType(layerDir)
+-		if err != nil {
+-			return false, err
+-		}
+-		if !supportsDType {
+-			return false, overlayutils.ErrDTypeNotSupported("overlay", backingFs)
++	f, err := os.Open("/proc/filesystems")
++	if err != nil {
++		return err
++	}
++	defer f.Close()
++
++	s := bufio.NewScanner(f)
++	for s.Scan() {
++		if s.Text() == "nodev\toverlay" {
++			return nil
+ 		}
++	}
++	logrus.Errorf("'overlay' not found as a supported filesystem on this host. Please ensure kernel is new enough and has overlay support loaded.")
++	return graphdriver.ErrNotSupported
++}
+ 
++func supportsMultipleLowerDir(home string, homeMagic graphdriver.FsMagic, rootUID, rootGID int) (supportsDType bool, err error) {
++	layerDir, err := ioutil.TempDir(home, "compat")
++	if err == nil {
+ 		// Try a test mount in the specific location we're looking at using.
+ 		mergedDir := filepath.Join(layerDir, "merged")
+ 		lower1Dir := filepath.Join(layerDir, "lower1")
+-- 
+2.22.0
+

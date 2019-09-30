@@ -1,0 +1,606 @@
+From cbcdb9000e1aed4ee28781fdb2066aafe474459a Mon Sep 17 00:00:00 2001
+From: LiuHao <liuhao27@huawei.com>
+Date: Thu, 25 Apr 2019 18:00:18 +0800
+Subject: [PATCH 10/30] optimize concurrent run
+
+Signed-off-by: LiuHao <liuhao27@huawei.com>
+---
+ .../containers/storage/containers.go          |  58 ++++++++--
+ .../github.com/containers/storage/images.go   |  79 ++++++++++----
+ .../github.com/containers/storage/layers.go   |  79 ++++++++++----
+ .../github.com/containers/storage/lockfile.go |  11 ++
+ vendor/github.com/containers/storage/store.go | 102 ++++++++++++++++--
+ 5 files changed, 276 insertions(+), 53 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/containers.go b/vendor/github.com/containers/storage/containers.go
+index beaf41f..112ae20 100644
+--- a/vendor/github.com/containers/storage/containers.go
++++ b/vendor/github.com/containers/storage/containers.go
+@@ -108,6 +108,7 @@ type ContainerStore interface {
+ 
+ type containerStore struct {
+ 	lockfile   Locker
++	rolockfile Locker
+ 	dir        string
+ 	containers []*Container
+ 	idindex    *truncindex.TruncIndex
+@@ -174,12 +175,12 @@ func (r *containerStore) datapath(id, key string) string {
+ 	return filepath.Join(r.datadir(id), makeBigDataBaseName(key))
+ }
+ 
+-func (r *containerStore) Load() error {
++func (r *containerStore) loadHelper() (error, bool) {
+ 	needSave := false
+ 	rpath := r.containerspath()
+ 	data, err := ioutil.ReadFile(rpath)
+ 	if err != nil && !os.IsNotExist(err) {
+-		return err
++		return err, needSave
+ 	}
+ 	containers := []*Container{}
+ 	layers := make(map[string]*Container)
+@@ -206,6 +207,19 @@ func (r *containerStore) Load() error {
+ 	r.byid = ids
+ 	r.bylayer = layers
+ 	r.byname = names
++	return nil, needSave
++}
++
++func (r *containerStore) ROLoad() error {
++	err, _ := r.loadHelper()
++	return err
++}
++
++func (r *containerStore) Load() error {
++	err, needSave := r.loadHelper()
++	if err != nil {
++		return err
++	}
+ 	if needSave {
+ 		return r.Save()
+ 	}
+@@ -228,25 +242,51 @@ func (r *containerStore) Save() error {
+ 	return ioutils.AtomicWriteFile(rpath, jdata, 0600)
+ }
+ 
+-func newContainerStore(dir string) (ContainerStore, error) {
+-	if err := os.MkdirAll(dir, 0700); err != nil {
+-		return nil, err
++func newContainerStore(readonly bool, dir string) (ContainerStore, error) {
++	var err error
++	var lockfile, rolockfile Locker
++	if !readonly {
++		if err := os.MkdirAll(dir, 0700); err != nil {
++			return nil, err
++		}
++		lockfile, err = GetLockfile(filepath.Join(dir, "containers.lock"))
++	} else {
++		rolockfile, err = GetROLockfile(filepath.Join(dir, "containers.lock"))
+ 	}
+-	lockfile, err := GetLockfile(filepath.Join(dir, "containers.lock"))
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	lockfile.Lock()
+-	defer lockfile.Unlock()
++	if readonly {
++		rolockfile.Lock()
++		defer rolockfile.Unlock()
++	} else {
++		lockfile.Lock()
++		defer lockfile.Unlock()
++	}
+ 	cstore := containerStore{
+ 		lockfile:   lockfile,
++		rolockfile: rolockfile,
+ 		dir:        dir,
+ 		containers: []*Container{},
+ 		byid:       make(map[string]*Container),
+ 		bylayer:    make(map[string]*Container),
+ 		byname:     make(map[string]*Container),
+ 	}
+-	if err := cstore.Load(); err != nil {
++	if readonly {
++		err = cstore.ROLoad()
++		if err != nil {
++			return nil, err
++		}
++		ReleaseLockfile(filepath.Join(dir, "containers.lock"))
++		lockfile, err = GetLockfile(filepath.Join(dir, "containers.lock"))
++		if err != nil {
++			return nil, err
++		}
++		cstore.lockfile = lockfile
++	} else {
++		err = cstore.Load()
++	}
++	if err != nil {
+ 		return nil, err
+ 	}
+ 	return &cstore, nil
+diff --git a/vendor/github.com/containers/storage/images.go b/vendor/github.com/containers/storage/images.go
+index 99e3b1c..96fbf84 100644
+--- a/vendor/github.com/containers/storage/images.go
++++ b/vendor/github.com/containers/storage/images.go
+@@ -133,13 +133,14 @@ type ImageStore interface {
+ }
+ 
+ type imageStore struct {
+-	lockfile Locker
+-	dir      string
+-	images   []*Image
+-	idindex  *truncindex.TruncIndex
+-	byid     map[string]*Image
+-	byname   map[string]*Image
+-	bydigest map[digest.Digest][]*Image
++	lockfile   Locker
++	rolockfile Locker
++	dir        string
++	images     []*Image
++	idindex    *truncindex.TruncIndex
++	byid       map[string]*Image
++	byname     map[string]*Image
++	bydigest   map[digest.Digest][]*Image
+ }
+ 
+ func copyImage(i *Image) *Image {
+@@ -179,12 +180,12 @@ func (r *imageStore) datapath(id, key string) string {
+ 	return filepath.Join(r.datadir(id), makeBigDataBaseName(key))
+ }
+ 
+-func (r *imageStore) Load() error {
++func (r *imageStore) loadHelper() (bool, error) {
+ 	shouldSave := false
+ 	rpath := r.imagespath()
+ 	data, err := ioutil.ReadFile(rpath)
+ 	if err != nil && !os.IsNotExist(err) {
+-		return err
++		return shouldSave, err
+ 	}
+ 	images := []*Image{}
+ 	idlist := []string{}
+@@ -215,14 +216,27 @@ func (r *imageStore) Load() error {
+ 			}
+ 		}
+ 	}
+-	if shouldSave && !r.IsReadWrite() {
+-		return ErrDuplicateImageNames
+-	}
+ 	r.images = images
+ 	r.idindex = truncindex.NewTruncIndex(idlist)
+ 	r.byid = ids
+ 	r.byname = names
+ 	r.bydigest = digests
++	return shouldSave, nil
++}
++
++func (r *imageStore) ROLoad() error {
++	_, err := r.loadHelper()
++	return err
++}
++
++func (r *imageStore) Load() error {
++	shouldSave, err := r.loadHelper()
++	if err != nil {
++		return err
++	}
++	if shouldSave && !r.IsReadWrite() {
++		return ErrDuplicateImageNames
++	}
+ 	if shouldSave {
+ 		return r.Save()
+ 	}
+@@ -248,25 +262,52 @@ func (r *imageStore) Save() error {
+ 	return ioutils.AtomicWriteFile(rpath, jdata, 0600)
+ }
+ 
+-func newImageStore(dir string) (ImageStore, error) {
+-	if err := os.MkdirAll(dir, 0700); err != nil {
+-		return nil, err
++func newImageStore(readonly bool, dir string) (ImageStore, error) {
++	var err error
++	var lockfile, rolockfile Locker
++	if !readonly {
++		if err := os.MkdirAll(dir, 0700); err != nil {
++			return nil, err
++		}
++		lockfile, err = GetLockfile(filepath.Join(dir, "images.lock"))
++	} else {
++		rolockfile, err = GetROLockfile(filepath.Join(dir, "images.lock"))
+ 	}
+-	lockfile, err := GetLockfile(filepath.Join(dir, "images.lock"))
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	lockfile.Lock()
+-	defer lockfile.Unlock()
++
++	if readonly {
++		rolockfile.Lock()
++		defer rolockfile.Unlock()
++	} else {
++		lockfile.Lock()
++		defer lockfile.Unlock()
++	}
+ 	istore := imageStore{
+ 		lockfile: lockfile,
++		rolockfile: rolockfile,
+ 		dir:      dir,
+ 		images:   []*Image{},
+ 		byid:     make(map[string]*Image),
+ 		byname:   make(map[string]*Image),
+ 		bydigest: make(map[digest.Digest][]*Image),
+ 	}
+-	if err := istore.Load(); err != nil {
++	if readonly {
++		err = istore.ROLoad()
++		if err != nil {
++			return nil, err
++		}
++		ReleaseLockfile(filepath.Join(dir, "images.lock"))
++		lockfile, err = GetLockfile(filepath.Join(dir, "images.lock"))
++		if err != nil {
++			return nil, err
++		}
++		istore.lockfile = lockfile
++	} else {
++		err = istore.Load()
++	}
++	if err != nil {
+ 		return nil, err
+ 	}
+ 	return &istore, nil
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index 0bb4b52..8fcc4e2 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -232,6 +232,7 @@ type LayerStore interface {
+ 
+ type layerStore struct {
+ 	lockfile          Locker
++	rolockfile        Locker
+ 	rundir            string
+ 	driver            drivers.Driver
+ 	layerdir          string
+@@ -283,12 +284,12 @@ func (r *layerStore) layerspath() string {
+ 	return filepath.Join(r.layerdir, "layers.json")
+ }
+ 
+-func (r *layerStore) Load() error {
++func (r *layerStore) loadHelper() (bool, error) {
+ 	shouldSave := false
+ 	rpath := r.layerspath()
+ 	data, err := ioutil.ReadFile(rpath)
+ 	if err != nil && !os.IsNotExist(err) {
+-		return err
++		return shouldSave, err
+ 	}
+ 	layers := []*Layer{}
+ 	idlist := []string{}
+@@ -323,13 +324,10 @@ func (r *layerStore) Load() error {
+ 			}
+ 		}
+ 	}
+-	if shouldSave && !r.IsReadWrite() {
+-		return ErrDuplicateLayerNames
+-	}
+ 	mpath := r.mountspath()
+ 	data, err = ioutil.ReadFile(mpath)
+ 	if err != nil && !os.IsNotExist(err) {
+-		return err
++		return shouldSave, err
+ 	}
+ 	layerMounts := []layerMountPoint{}
+ 	if err = json.Unmarshal(data, &layerMounts); len(data) == 0 || err == nil {
+@@ -369,13 +367,29 @@ func (r *layerStore) Load() error {
+ 				}
+ 			}
+ 		}
+-		if shouldSave {
+-			return r.Save()
+-		}
+ 	}
++	return shouldSave, err
++}
++
++func (r *layerStore) ROLoad() error {
++	_, err := r.loadHelper()
+ 	return err
+ }
+ 
++func (r *layerStore) Load() error {
++	shouldSave, err := r.loadHelper()
++	if err != nil {
++		return err
++	}
++	if shouldSave && !r.IsReadWrite() {
++		return ErrDuplicateLayerNames
++	}
++	if r.IsReadWrite() && shouldSave {
++		return r.Save()
++	}
++	return nil
++}
++
+ func (r *layerStore) Save() error {
+ 	if !r.IsReadWrite() {
+ 		return errors.Wrapf(ErrStoreIsReadOnly, "not allowed to modify the layer store at %q", r.layerspath())
+@@ -416,21 +430,36 @@ func (r *layerStore) Save() error {
+ 	return ioutils.AtomicWriteFile(mpath, jmdata, 0600)
+ }
+ 
+-func newLayerStore(rundir string, layerdir string, driver drivers.Driver, uidMap, gidMap []idtools.IDMap) (LayerStore, error) {
+-	if err := os.MkdirAll(rundir, 0700); err != nil {
+-		return nil, err
++func newLayerStore(readonly bool, rundir string, layerdir string, driver drivers.Driver, uidMap, gidMap []idtools.IDMap) (LayerStore, error) {
++	if !readonly {
++		if err := os.MkdirAll(rundir, 0700); err != nil {
++			return nil, err
++		}
++		if err := os.MkdirAll(layerdir, 0700); err != nil {
++			return nil, err
++		}
+ 	}
+-	if err := os.MkdirAll(layerdir, 0700); err != nil {
+-		return nil, err
++	var err error
++	var lockfile, rolockfile Locker
++	if readonly {
++		rolockfile, err = GetROLockfile(filepath.Join(layerdir, "layers.lock"))
++	} else {
++		lockfile, err = GetLockfile(filepath.Join(layerdir, "layers.lock"))
+ 	}
+-	lockfile, err := GetLockfile(filepath.Join(layerdir, "layers.lock"))
++
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	lockfile.Lock()
+-	defer lockfile.Unlock()
++	if readonly {
++		rolockfile.Lock()
++		defer rolockfile.Unlock()
++	} else {
++		lockfile.Lock()
++		defer lockfile.Unlock()
++	}
+ 	rlstore := layerStore{
+ 		lockfile: lockfile,
++		rolockfile: rolockfile,
+ 		driver:   driver,
+ 		rundir:   rundir,
+ 		layerdir: layerdir,
+@@ -440,7 +469,21 @@ func newLayerStore(rundir string, layerdir string, driver drivers.Driver, uidMap
+ 		uidMap:   copyIDMap(uidMap),
+ 		gidMap:   copyIDMap(gidMap),
+ 	}
+-	if err := rlstore.Load(); err != nil {
++	if readonly {
++		err = rlstore.ROLoad()
++		if err != nil {
++			return nil, err
++		}
++		ReleaseLockfile(filepath.Join(layerdir, "layers.lock"))
++		lockfile, err = GetLockfile(filepath.Join(layerdir, "layers.lock"))
++		if err != nil {
++			return nil, err
++		}
++		rlstore.lockfile = lockfile
++	} else {
++		err = rlstore.Load()
++	}
++	if err != nil {
+ 		return nil, err
+ 	}
+ 	return &rlstore, nil
+diff --git a/vendor/github.com/containers/storage/lockfile.go b/vendor/github.com/containers/storage/lockfile.go
+index 9f6a181..9566d52 100644
+--- a/vendor/github.com/containers/storage/lockfile.go
++++ b/vendor/github.com/containers/storage/lockfile.go
+@@ -38,6 +38,17 @@ var (
+ 	lockfilesLock sync.Mutex
+ )
+ 
++func ReleaseLockfile(path string) {
++	lockfilesLock.Lock()
++	defer lockfilesLock.Unlock()
++	if lockfiles == nil {
++		return
++	}
++	cleanPath := filepath.Clean(path)
++	if _, ok := lockfiles[cleanPath]; ok {
++		delete(lockfiles, cleanPath)
++	}
++}
+ // GetLockfile opens a read-write lock file, creating it if necessary.  The
+ // Locker object it returns will be returned unlocked.
+ func GetLockfile(path string) (Locker, error) {
+diff --git a/vendor/github.com/containers/storage/store.go b/vendor/github.com/containers/storage/store.go
+index df4205f..f27c4db 100644
+--- a/vendor/github.com/containers/storage/store.go
++++ b/vendor/github.com/containers/storage/store.go
+@@ -146,6 +146,7 @@ type StoreOptions struct {
+ 	// for use inside of a user namespace where UID mapping is being used.
+ 	UIDMap []idtools.IDMap `json:"uidmap,omitempty"`
+ 	GIDMap []idtools.IDMap `json:"gidmap,omitempty"`
++	ReadOnlay bool
+ }
+ 
+ // Store wraps up the various types of file-based stores that we use into a
+@@ -525,6 +526,7 @@ type store struct {
+ 	lastLoaded      time.Time
+ 	runRoot         string
+ 	graphLock       Locker
++	graphROLock     Locker
+ 	graphRoot       string
+ 	graphDriverName string
+ 	graphOptions    []string
+@@ -596,20 +598,39 @@ func GetStore(options StoreOptions) (Store, error) {
+ 		}
+ 	}
+ 
+-	graphLock, err := GetLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
++	var err error
++	var graphROLock, graphLock Locker
++	if options.ReadOnlay {
++		graphROLock, err = GetROLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
++	} else {
++		graphLock, err = GetLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
++	}
+ 	if err != nil {
+ 		return nil, err
+ 	}
+ 	s := &store{
+ 		runRoot:         options.RunRoot,
+ 		graphLock:       graphLock,
++		graphROLock:     graphROLock,
+ 		graphRoot:       options.GraphRoot,
+ 		graphDriverName: options.GraphDriverName,
+ 		graphOptions:    options.GraphDriverOptions,
+ 		uidMap:          copyIDMap(options.UIDMap),
+ 		gidMap:          copyIDMap(options.GIDMap),
+ 	}
+-	if err := s.load(); err != nil {
++
++	if options.ReadOnlay {
++		err = s.loadWithROLock()
++		ReleaseLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
++		graphLock, err = GetLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
++		if err != nil {
++			return nil, err
++		}
++		s.graphLock = graphLock
++	} else {
++		err = s.load()
++	}
++	if err != nil {
+ 		return nil, err
+ 	}
+ 
+@@ -654,6 +675,40 @@ func (s *store) GIDMap() []idtools.IDMap {
+ 	return copyIDMap(s.gidMap)
+ }
+ 
++func (s *store) loadWithROLock() error {
++	driver, err := s.getGraphDriver()
++	if err != nil {
++		return err
++	}
++	s.graphDriver = driver
++	s.graphDriverName = driver.String()
++	driverPrefix := s.graphDriverName + "-"
++
++	rls, err := s.LayerROStore()
++	if err != nil {
++		return err
++	}
++	s.layerStore = rls
++
++	gipath := filepath.Join(s.graphRoot, driverPrefix+"images")
++
++	ris, err := newImageStore(true, gipath)
++	if err != nil {
++		return err
++	}
++	s.imageStore = ris
++
++	gcpath := filepath.Join(s.graphRoot, driverPrefix+"containers")
++
++	rcs, err := newContainerStore(true, gcpath)
++	if err != nil {
++		return err
++	}
++
++	s.containerStore = rcs
++	return nil
++}
++
+ func (s *store) load() error {
+ 	driver, err := s.GraphDriver()
+ 	if err != nil {
+@@ -676,7 +731,7 @@ func (s *store) load() error {
+ 	if err := os.MkdirAll(gipath, 0700); err != nil {
+ 		return err
+ 	}
+-	ris, err := newImageStore(gipath)
++	ris, err := newImageStore(false, gipath)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -689,7 +744,7 @@ func (s *store) load() error {
+ 	if err := os.MkdirAll(gcpath, 0700); err != nil {
+ 		return err
+ 	}
+-	rcs, err := newContainerStore(gcpath)
++	rcs, err := newContainerStore(false, gcpath)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -731,6 +786,12 @@ func (s *store) GraphDriver() (drivers.Driver, error) {
+ 	return s.getGraphDriver()
+ }
+ 
++func (s *store) LayerROStore() (LayerStore, error) {
++	s.graphROLock.Lock()
++	defer s.graphROLock.Unlock()
++
++	return s.layerStoreHelper(true)
++}
+ // LayerStore obtains and returns a handle to the writeable layer store object
+ // used by the Store.  Accessing this store directly will bypass locking and
+ // synchronization, so it is not a part of the exported Store interface.
+@@ -742,6 +803,11 @@ func (s *store) LayerStore() (LayerStore, error) {
+ 		s.layerStore = nil
+ 		s.lastLoaded = time.Now()
+ 	}
++	return s.layerStoreHelper(false)
++}
++
++func (s *store) layerStoreHelper(readonly bool) (LayerStore, error) {
++	var err error
+ 	if s.layerStore != nil {
+ 		return s.layerStore, nil
+ 	}
+@@ -751,14 +817,36 @@ func (s *store) LayerStore() (LayerStore, error) {
+ 	}
+ 	driverPrefix := s.graphDriverName + "-"
+ 	rlpath := filepath.Join(s.runRoot, driverPrefix+"layers")
+-	if err := os.MkdirAll(rlpath, 0700); err != nil {
++	if readonly {
++		s, err := os.Stat(rlpath)
++		if err != nil {
++			return nil, err
++		}
++		if !s.IsDir() {
++			return nil, errors.New(rlpath + " is not directory")
++		}
++	} else {
++		err = os.MkdirAll(rlpath, 0700)
++	}
++	if err != nil {
+ 		return nil, err
+ 	}
+ 	glpath := filepath.Join(s.graphRoot, driverPrefix+"layers")
+-	if err := os.MkdirAll(glpath, 0700); err != nil {
++	if readonly {
++		s, err := os.Stat(glpath)
++		if err != nil {
++			return nil, err
++		}
++		if !s.IsDir() {
++			return nil, errors.New(glpath + " is not directory")
++		}
++	} else {
++		err = os.MkdirAll(glpath, 0700)
++	}
++	if err != nil {
+ 		return nil, err
+ 	}
+-	rls, err := newLayerStore(rlpath, glpath, driver, s.uidMap, s.gidMap)
++	rls, err := newLayerStore(false, rlpath, glpath, driver, s.uidMap, s.gidMap)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-- 
+2.22.0
+

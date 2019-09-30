@@ -1,0 +1,35 @@
+From e0767068949e7423ef66641a2558f92891a9824c Mon Sep 17 00:00:00 2001
+From: LiuHao <liuhao27@huawei.com>
+Date: Thu, 2 May 2019 11:25:07 +0800
+Subject: [PATCH 12/30] optimize isulad_kit operator
+
+get mountpoint from driver
+
+Signed-off-by: LiuHao <liuhao27@huawei.com>
+---
+ vendor/github.com/containers/storage/layers.go | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index e01cf23..4d5b9f8 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -952,7 +952,14 @@ func (r *layerStore) Exists(id string) bool {
+ 
+ func (r *layerStore) Get(id string) (*Layer, error) {
+ 	if layer, ok := r.lookup(id); ok {
+-		return copyLayer(layer), nil
++		result := copyLayer(layer)
++		data, err := r.driver.Metadata(layer.ID)
++		if err == nil {
++			if mergedDir, ok := data["MergedDir"]; ok {
++				result.MountPoint = mergeDir
++			}
++		}
++		return result, nil
+ 	}
+ 	return nil, ErrLayerUnknown
+ }
+-- 
+2.22.0
+

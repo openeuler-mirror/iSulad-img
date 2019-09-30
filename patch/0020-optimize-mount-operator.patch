@@ -1,0 +1,609 @@
+From 519da60484c5778b0825897a66c0c1c31b31df77 Mon Sep 17 00:00:00 2001
+From: LiuHao <liuhao27@huawei.com>
+Date: Sat, 25 May 2019 16:45:28 +0800
+Subject: [PATCH 20/30] optimize mount operator
+
+1. split mountpoints.json to each container
+2. refactor mount operator
+
+Signed-off-by: LiuHao <liuhao27@huawei.com>
+---
+ .../github.com/containers/storage/layers.go   | 197 +++++++++---------
+ vendor/github.com/containers/storage/store.go | 157 ++++++++++++--
+ 2 files changed, 234 insertions(+), 120 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index 51d8dbd..a466f05 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -223,6 +223,8 @@ type LayerStore interface {
+ 	// Mounted returns number of times the layer has been mounted.
+ 	Mounted(id string) (int, error)
+ 
++	LoadLayerMountPoint(layer *Layer) error
++
+ 	// ParentOwners returns the UIDs and GIDs of parents of the layer's mountpoint
+ 	// for which the layer's UID and GID maps don't contain corresponding entries.
+ 	ParentOwners(id string) (uids, gids []int, err error)
+@@ -242,7 +244,6 @@ type layerStore struct {
+ 	idindex           *truncindex.TruncIndex
+ 	byid              map[string]*Layer
+ 	byname            map[string]*Layer
+-	bymount           map[string]*Layer
+ 	bycompressedsum   map[digest.Digest][]string
+ 	byuncompressedsum map[digest.Digest][]string
+ 	uidMap            []idtools.IDMap
+@@ -297,7 +298,6 @@ func (r *layerStore) loadHelper() (bool, error) {
+ 	idlist := []string{}
+ 	ids := make(map[string]*Layer)
+ 	names := make(map[string]*Layer)
+-	mounts := make(map[string]*Layer)
+ 	compressedsums := make(map[digest.Digest][]string)
+ 	uncompressedsums := make(map[digest.Digest][]string)
+ 	if r.lockfile.IsReadWrite() {
+@@ -326,28 +326,11 @@ func (r *layerStore) loadHelper() (bool, error) {
+ 			}
+ 		}
+ 	}
+-	mpath := r.mountspath()
+-	data, err = ioutil.ReadFile(mpath)
+-	if err != nil && !os.IsNotExist(err) {
+-		return shouldSave, err
+-	}
+-	layerMounts := []layerMountPoint{}
+-	if err = json.Unmarshal(data, &layerMounts); len(data) == 0 || err == nil {
+-		for _, mount := range layerMounts {
+-			if mount.MountPoint != "" {
+-				if layer, ok := ids[mount.ID]; ok {
+-					mounts[mount.MountPoint] = layer
+-					layer.MountPoint = mount.MountPoint
+-					layer.MountCount = mount.MountCount
+-				}
+-			}
+-		}
+-	}
++
+ 	r.layers = layers
+ 	r.idindex = truncindex.NewTruncIndex(idlist)
+ 	r.byid = ids
+ 	r.byname = names
+-	r.bymount = mounts
+ 	r.bycompressedsum = compressedsums
+ 	r.byuncompressedsum = uncompressedsums
+ 	err = nil
+@@ -392,74 +375,100 @@ func (r *layerStore) Load() error {
+ 	return nil
+ }
+ 
+-func (r *layerStore) Save() error {
+-	if !r.IsReadWrite() {
+-		return errors.Wrapf(ErrStoreIsReadOnly, "not allowed to modify the layer store at %q", r.layerspath())
+-	}
+-	if !r.Locked() {
+-		return errors.New("layer store is not locked")
+-	}
+-	rpath := r.layerspath()
+-	if err := os.MkdirAll(filepath.Dir(rpath), 0700); err != nil {
+-		return err
++func (r *layerStore) layerMountPointPath(layerID string) string {
++	fname := layerID + ".json"
++	return filepath.Join(r.rundir, fname)
++}
++
++func (r *layerStore) DeleteLayerMountPoint(layer *Layer) error {
++	mpath := r.layerMountPointPath(layer.ID)
++	err := os.Remove(mpath)
++	if err != nil && os.IsNotExist(err) {
++		return nil
+ 	}
+-	jldata, err := json.Marshal(&r.layers)
+-	if err != nil {
+-		return err
++	return err
++}
++
++func (r *layerStore) SaveLayerMountPoint(layer *Layer) error {
++	mpath := r.layerMountPointPath(layer.ID)
++	mount := layerMountPoint {
++		ID:		layer.ID,
++		MountPoint: layer.MountPoint,
++		MountCount: layer.MountCount,
+ 	}
+-	mpath := r.mountspath()
+-	if err := os.MkdirAll(filepath.Dir(mpath), 0700); err != nil {
++	mdata, err := json.Marshal(&mount)
++	if (err != nil) {
+ 		return err
+ 	}
+-	mounts := make([]layerMountPoint, 0, len(r.layers))
+-	for _, layer := range r.layers {
+-		if layer.MountPoint != "" && layer.MountCount > 0 {
+-			mounts = append(mounts, layerMountPoint{
+-				ID:         layer.ID,
+-				MountPoint: layer.MountPoint,
+-				MountCount: layer.MountCount,
+-			})
+-		}
++	return ioutils.AtomicWriteFile(mpath, mdata, 0600)
++}
++
++func (r *layerStore) SaveMount(layer *Layer) error {
++	if layer.MountCount == 0 {
++		return r.DeleteLayerMountPoint(layer)
+ 	}
+-	jmdata, err := json.Marshal(&mounts)
++	return r.SaveLayerMountPoint(layer)
++}
++
++func (r *layerStore) LoadLayerMountPoint(layer *Layer) error {
++	mpath := r.layerMountPointPath(layer.ID)
++	mdata, err := ioutil.ReadFile(mpath)
+ 	if err != nil {
++		if os.IsNotExist(err) {
++			return nil
++		}
+ 		return err
+ 	}
+-	if err := ioutils.AtomicWriteFile(rpath, jldata, 0600); err != nil {
++	mount := layerMountPoint{}
++	if err = json.Unmarshal(mdata, &mount); err != nil {
+ 		return err
+ 	}
+-	defer r.Touch()
+-	return ioutils.AtomicWriteFile(mpath, jmdata, 0600)
++	layer.MountPoint = mount.MountPoint
++	layer.MountCount = mount.MountCount
++	return nil
+ }
+ 
+-func (r *layerStore) SaveMount() error {
++func (r *layerStore) Save() error {
+ 	if !r.IsReadWrite() {
+ 		return errors.Wrapf(ErrStoreIsReadOnly, "not allowed to modify the layer store at %q", r.layerspath())
+ 	}
+ 	if !r.Locked() {
+ 		return errors.New("layer store is not locked")
+ 	}
+-
+-	mpath := r.mountspath()
+-	if err := os.MkdirAll(filepath.Dir(mpath), 0700); err != nil {
++	rpath := r.layerspath()
++	if err := os.MkdirAll(filepath.Dir(rpath), 0700); err != nil {
+ 		return err
+ 	}
+-	mounts := make([]layerMountPoint, 0, len(r.layers))
+-	for _, layer := range r.layers {
+-		if layer.MountPoint != "" && layer.MountCount > 0 {
+-			mounts = append(mounts, layerMountPoint{
+-				ID:         layer.ID,
+-				MountPoint: layer.MountPoint,
+-				MountCount: layer.MountCount,
+-			})
+-		}
+-	}
+-	jmdata, err := json.Marshal(&mounts)
++	jldata, err := json.Marshal(&r.layers)
+ 	if err != nil {
+ 		return err
+ 	}
++	if err := ioutils.AtomicWriteFile(rpath, jldata, 0600); err != nil {
++		return err
++	}
+ 	defer r.Touch()
+-	return ioutils.AtomicWriteFile(mpath, jmdata, 0600)
++	return nil
++}
++
++func newLayerStoreWithoutData(rundir string, layerdir string, driver drivers.Driver, uidMap, gidMap []idtools.IDMap) (LayerStore, error) {
++	var err error
++	var lockfile filelocker.Locker
++
++	lockfile, err = filelocker.GetLockfile(filepath.Join(layerdir, "layers.lock"))
++	if err != nil {
++		return nil, err
++	}
++	rlstore := layerStore{
++		lockfile: lockfile,
++		driver:   driver,
++		rundir:   rundir,
++		layerdir: layerdir,
++		byid:     make(map[string]*Layer),
++		byname:   make(map[string]*Layer),
++		uidMap:   copyIDMap(uidMap),
++		gidMap:   copyIDMap(gidMap),
++	}
++	return &rlstore, nil
+ }
+ 
+ func newLayerStore(readonly bool, rundir string, layerdir string, driver drivers.Driver, uidMap, gidMap []idtools.IDMap) (LayerStore, error) {
+@@ -496,7 +505,6 @@ func newLayerStore(readonly bool, rundir string, layerdir string, driver drivers
+ 		rundir:   rundir,
+ 		layerdir: layerdir,
+ 		byid:     make(map[string]*Layer),
+-		bymount:  make(map[string]*Layer),
+ 		byname:   make(map[string]*Layer),
+ 		uidMap:   copyIDMap(uidMap),
+ 		gidMap:   copyIDMap(gidMap),
+@@ -534,7 +542,6 @@ func newROLayerStore(rundir string, layerdir string, driver drivers.Driver) (ROL
+ 		rundir:   rundir,
+ 		layerdir: layerdir,
+ 		byid:     make(map[string]*Layer),
+-		bymount:  make(map[string]*Layer),
+ 		byname:   make(map[string]*Layer),
+ 	}
+ 	if err := rlstore.Load(); err != nil {
+@@ -733,21 +740,23 @@ func (r *layerStore) Mounted(id string) (int, error) {
+ 	if !ok {
+ 		return 0, ErrLayerUnknown
+ 	}
++	if err := r.LoadLayerMountPoint(layer); err != nil {
++		return 0, err
++	}
+ 	return layer.MountCount, nil
+ }
+ 
+ func (r *layerStore) Mount(id string, options drivers.MountOpts) (string, error) {
+-	if !r.IsReadWrite() {
+-		return "", errors.Wrapf(ErrStoreIsReadOnly, "not allowed to update mount locations for layers at %q", r.mountspath())
+-	}
+-	layer, ok := r.lookup(id)
+-	if !ok {
++	layer := &Layer{}
++	layer.ID = id
++	err := r.LoadLayerMountPoint(layer)
++	if err != nil {
+ 		return "", ErrLayerUnknown
+ 	}
+ 	if layer.MountCount > 0 {
+ 		if mounted, err := mount.Mounted(layer.MountPoint); mounted && err == nil {
+ 			layer.MountCount++
+-			return layer.MountPoint, r.SaveMount()
++			return layer.MountPoint, r.SaveMount(layer)
+ 		}
+ 	}
+ 	if options.MountLabel == "" {
+@@ -761,44 +770,32 @@ func (r *layerStore) Mount(id string, options drivers.MountOpts) (string, error)
+ 	}
+ 	mountpoint, err := r.driver.Get(id, options)
+ 	if mountpoint != "" && err == nil {
+-		if layer.MountPoint != "" {
+-			delete(r.bymount, layer.MountPoint)
+-		}
+ 		layer.MountPoint = filepath.Clean(mountpoint)
+ 		layer.MountCount++
+-		r.bymount[layer.MountPoint] = layer
+-		err = r.SaveMount()
++		err = r.SaveMount(layer)
+ 	}
+ 	return mountpoint, err
+ }
+ 
+ func (r *layerStore) Unmount(id string, force bool) (bool, error) {
+-	if !r.IsReadWrite() {
+-		return false, errors.Wrapf(ErrStoreIsReadOnly, "not allowed to update mount locations for layers at %q", r.mountspath())
+-	}
+-	layer, ok := r.lookup(id)
+-	if !ok {
+-		layerByMount, ok := r.bymount[filepath.Clean(id)]
+-		if !ok {
+-			return false, ErrLayerUnknown
+-		}
+-		layer = layerByMount
++	layer := &Layer{}
++	layer.ID = id
++	err := r.LoadLayerMountPoint(layer)
++	if err != nil {
++		return false, ErrLayerUnknown
+ 	}
+ 	if force {
+ 		layer.MountCount = 1
+ 	}
+ 	if layer.MountCount > 1 {
+ 		layer.MountCount--
+-		return true, r.SaveMount()
++		return true, r.SaveMount(layer)
+ 	}
+-	err := r.driver.Put(id)
++	err = r.driver.Put(id)
+ 	if err == nil || os.IsNotExist(err) {
+-		if layer.MountPoint != "" {
+-			delete(r.bymount, layer.MountPoint)
+-		}
+ 		layer.MountCount--
+ 		layer.MountPoint = ""
+-		return false, r.SaveMount()
++		return false, r.SaveMount(layer)
+ 	}
+ 	return true, err
+ }
+@@ -808,6 +805,9 @@ func (r *layerStore) ParentOwners(id string) (uids, gids []int, err error) {
+ 	if !ok {
+ 		return nil, nil, ErrLayerUnknown
+ 	}
++	if err := r.LoadLayerMountPoint(layer); err != nil {
++		return nil, nil, err
++	}
+ 	if len(layer.UIDMap) == 0 && len(layer.GIDMap) == 0 {
+ 		// We're not using any mappings, so there aren't any unmapped IDs on parent directories.
+ 		return nil, nil, nil
+@@ -920,11 +920,17 @@ func (r *layerStore) Delete(id string) error {
+ 	if !ok {
+ 		return ErrLayerUnknown
+ 	}
++	if err = r.LoadLayerMountPoint(layer); err != nil {
++		return err
++	}
+ 	id = layer.ID
+ 	// This check is needed for idempotency of delete where the layer could have been
+ 	// already unmounted (since c/storage gives you that API directly)
+ 	for layer.MountCount > 0 {
+-		if _, err := r.Unmount(id, false); err != nil {
++		if err = r.LoadLayerMountPoint(layer); err != nil {
++			return err
++		}
++		if _, err = r.Unmount(id, false); err != nil {
+ 			return err
+ 		}
+ 	}
+@@ -932,9 +938,6 @@ func (r *layerStore) Delete(id string) error {
+ 	delete(r.byid, id)
+ 	r.idindex.Delete(id)
+ 	mountLabel := layer.MountLabel
+-	if layer.MountPoint != "" {
+-		delete(r.bymount, layer.MountPoint)
+-	}
+ 	toDeleteIndex := -1
+ 	for i, candidate := range r.layers {
+ 		if candidate.ID == id {
+diff --git a/vendor/github.com/containers/storage/store.go b/vendor/github.com/containers/storage/store.go
+index 4d96bb3..da36720 100644
+--- a/vendor/github.com/containers/storage/store.go
++++ b/vendor/github.com/containers/storage/store.go
+@@ -2,6 +2,7 @@ package storage
+ 
+ import (
+ 	"encoding/base64"
++	"encoding/json"
+ 	"fmt"
+ 	"io"
+ 	"io/ioutil"
+@@ -147,7 +148,8 @@ type StoreOptions struct {
+ 	// for use inside of a user namespace where UID mapping is being used.
+ 	UIDMap []idtools.IDMap `json:"uidmap,omitempty"`
+ 	GIDMap []idtools.IDMap `json:"gidmap,omitempty"`
+-	ReadOnlay bool
++	ReadOnly bool
++	DonotLoadData bool
+ }
+ 
+ // Store wraps up the various types of file-based stores that we use into a
+@@ -601,7 +603,7 @@ func GetStore(options StoreOptions) (Store, error) {
+ 
+ 	var err error
+ 	var graphROLock, graphLock filelocker.Locker
+-	if options.ReadOnlay {
++	if options.ReadOnly && !options.DonotLoadData {
+ 		graphROLock, err = filelocker.GetROLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
+ 	} else {
+ 		graphLock, err = filelocker.GetLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
+@@ -619,8 +621,17 @@ func GetStore(options StoreOptions) (Store, error) {
+ 		uidMap:          copyIDMap(options.UIDMap),
+ 		gidMap:          copyIDMap(options.GIDMap),
+ 	}
++	/* do not load data */
++	if options.DonotLoadData {
++		err = s.loadWithData()
++		if err != nil {
++			return nil, err
++		}
++		stores = append(stores, s)
++		return s, nil
++	}
+ 
+-	if options.ReadOnlay {
++	if options.ReadOnly {
+ 		err = s.loadWithROLock()
+ 		filelocker.ReleaseLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
+ 		graphLock, err = filelocker.GetLockfile(filepath.Join(options.GraphRoot, "storage.lock"))
+@@ -710,6 +721,26 @@ func (s *store) loadWithROLock() error {
+ 	return nil
+ }
+ 
++func (s *store) loadWithData() error {
++	driver, err := s.getGraphDriver()
++	if err != nil {
++		return err
++	}
++	s.graphDriver = driver
++	s.graphDriverName = driver.String()
++	driverPrefix := s.graphDriverName + "-"
++
++	rlpath := filepath.Join(s.runRoot, driverPrefix + "layers")
++	glpath := filepath.Join(s.graphRoot, driverPrefix + "layers")
++
++	rls, err := newLayerStoreWithoutData(rlpath, glpath, driver, s.uidMap, s.gidMap)
++	if err != nil {
++		return err
++	}
++	s.layerStore = rls
++	return nil
++}
++
+ func (s *store) load() error {
+ 	driver, err := s.GraphDriver()
+ 	if err != nil {
+@@ -1189,6 +1220,54 @@ func (s *store) imageTopLayerForMapping(image *Image, ristore ROImageStore, read
+ 	return layer, nil
+ }
+ 
++func (s *store) ContainerRunJsonPath(id string) (string, error) {
++	middleDir := s.graphDriverName + "-containers"
++	rcpath := filepath.Join(s.RunRoot(), middleDir)
++	if err := os.MkdirAll(rcpath, 0700); err != nil {
++		return "", err
++	}
++	fname := id + ".json"
++	fpath := filepath.Join(rcpath, fname)
++	return fpath, nil
++}
++
++func (s *store) SaveContainerRunJson(container *Container) error {
++	rpath, err := s.ContainerRunJsonPath(container.ID)
++	if err != nil {
++		return err
++	}
++	jdata, err := json.Marshal(container)
++	if err != nil {
++		return err
++	}
++	return ioutils.AtomicWriteFile(rpath, jdata, 0600)
++}
++
++func (s *store) LoadContainerRunJson(id string) (*Container, error) {
++	rpath, err := s.ContainerRunJsonPath(id)
++	if err != nil {
++		return nil, err
++	}
++	data, err := ioutil.ReadFile(rpath)
++	if err != nil {
++		return nil, err
++	}
++	container := &Container{}
++	err = json.Unmarshal(data, container)
++	return container, err
++}
++
++func (s *store) DeleteContainerRunJson(id string) error {
++	middleDir := s.graphDriverName + "-containers"
++	fname := id + ".json"
++	cpath := filepath.Join(s.RunRoot(), middleDir, fname)
++	err := os.Remove(cpath)
++	if err != nil && os.IsNotExist(err) {
++		return nil
++	}
++	return err
++}
++
+ func (s *store) CreateContainer(id string, names []string, image, layer, metadata string, options *ContainerOptions) (*Container, error) {
+ 	if options == nil {
+ 		options = &ContainerOptions{}
+@@ -1336,6 +1415,10 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
+ 	if err != nil || container == nil {
+ 		rlstore.Delete(layer)
+ 	}
++	if err = s.SaveContainerRunJson(container); err != nil {
++		rlstore.Delete(layer)
++		return nil, err
++	}
+ 	return container, err
+ }
+ 
+@@ -2485,6 +2568,9 @@ func (s *store) DeleteContainer(id string) error {
+ 			if err = os.RemoveAll(rcpath); err != nil {
+ 				return err
+ 			}
++			if err = s.DeleteContainerRunJson(id); err != nil {
++				return err
++			}
+ 			return nil
+ 		}
+ 	}
+@@ -2604,36 +2690,56 @@ func (s *store) Version() ([][2]string, error) {
+ 	return [][2]string{}, nil
+ }
+ 
++type RuntimeContainerMetadata struct {
++	// Pod is true if this is the pod's infrastructure container.
++	Pod bool `json:"pod,omitempty"` // Applicable to both PodSandboxes and Containers
++	// The pod's name and ID, kept for use by upper layers in determining
++	// which containers belong to which pods.
++	PodName string `json:"pod-name"` // Applicable to both PodSandboxes and Containers, mandatory
++	PodID   string `json:"pod-id"`   // Applicable to both PodSandboxes and Containers, mandatory
++	// The provided name and the ID of the image that was used to
++	// instantiate the container.
++	ImageName string `json:"image-name"` // Applicable to both PodSandboxes and Containers
++	ImageID   string `json:"image-id"`   // Applicable to both PodSandboxes and Containers
++	// The container's name, which for an infrastructure container is usually PodName + "-infra".
++	ContainerName string `json:"name"` // Applicable to both PodSandboxes and Containers, mandatory
++	// The name as originally specified in PodSandbox or Container CRI metadata.
++	MetadataName string `json:"metadata-name"`        // Applicable to both PodSandboxes and Containers, mandatory
++	UID          string `json:"uid,omitempty"`        // Only applicable to pods
++	Namespace    string `json:"namespace,omitempty"`  // Only applicable to pods
++	Attempt      uint32 `json:"attempt,omitempty"`    // Applicable to both PodSandboxes and Containers
++	CreatedAt    int64  `json:"created-at"`           // Applicable to both PodSandboxes and Containers
++	MountLabel   string `json:"mountlabel,omitempty"` // Applicable to both PodSandboxes and Containers
++}
++
+ func (s *store) Mount(id, mountLabel string) (string, error) {
+-	container, err := s.Container(id)
+ 	var (
+ 		uidMap, gidMap []idtools.IDMap
+ 		mountOpts      []string
+ 	)
+-	if err == nil {
+-		uidMap, gidMap = container.UIDMap, container.GIDMap
+-		id = container.LayerID
+-		mountOpts = container.MountOpts()
+-	}
+-	rlstore, err := s.LayerStore()
++	container, err := s.LoadContainerRunJson(id)
+ 	if err != nil {
+ 		return "", err
+ 	}
+-	rlstore.Lock()
+-	defer rlstore.Unlock()
+-	if modified, err := rlstore.Modified(); modified || err != nil {
+-		rlstore.Load()
++	metadata := RuntimeContainerMetadata{}
++	if err = json.Unmarshal([]byte(container.Metadata), &metadata); err != nil {
++		return "", err
+ 	}
+-	if rlstore.Exists(id) {
+-		options := drivers.MountOpts{
+-			MountLabel: mountLabel,
+-			UidMaps:    uidMap,
+-			GidMaps:    gidMap,
+-			Options:    mountOpts,
+-		}
+-		return rlstore.Mount(id, options)
++	uidMap, gidMap = container.UIDMap, container.GIDMap
++	id = container.LayerID
++	mountOpts = container.MountOpts()
++
++	options := drivers.MountOpts{
++		MountLabel: metadata.MountLabel,
++		UidMaps:    uidMap,
++		GidMaps:    gidMap,
++		Options:    mountOpts,
+ 	}
+-	return "", ErrLayerUnknown
++	rlstore := s.layerStore
++	if rlstore == nil {
++		return "", errors.New("Can not found layer store")
++	}
++	return rlstore.Mount(id, options)
+ }
+ 
+ func (s *store) Mounted(id string) (int, error) {
+@@ -3223,6 +3329,9 @@ func (s *store) Shutdown(force bool) ([]string, error) {
+ 		return mounted, err
+ 	}
+ 	for _, layer := range layers {
++		if err3 := rlstore.LoadLayerMountPoint(&layer); err3 != nil {
++			err = err3
++		}
+ 		if layer.MountCount == 0 {
+ 			continue
+ 		}
+@@ -3562,6 +3671,8 @@ func init() {
+ 	DefaultStoreOptions.RunRoot = "/var/run/containers/storage"
+ 	DefaultStoreOptions.GraphRoot = "/var/lib/containers/storage"
+ 	DefaultStoreOptions.GraphDriverName = ""
++	DefaultStoreOptions.ReadOnly = false
++	DefaultStoreOptions.DonotLoadData = false
+ 
+ 	ReloadConfigurationFile(defaultConfigFile, &DefaultStoreOptions)
+ }
+-- 
+2.22.0
+
