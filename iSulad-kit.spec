@@ -2,14 +2,14 @@
 %global _release 20190809.172307.git763c5091
 Name:       iSulad-kit
 Version:    %{_version}
-Release:    %{_release}%{?dist}
+Release:    %{_release}
 Summary:    a tool for downloading iSulad images
 
 
 Group:      Applications/System
 License:    Mulan PSL v1
 URL:        http://code.huawei.com/containers/iSulad-kit
-Source0:    %{name}-1.0.tar.gz
+Source0:    iSulad-kit-1.0.tar.gz
 
 BuildRequires:  golang >= 1.8.3
 BuildRequires:  gpgme gpgme-devel
@@ -20,7 +20,7 @@ A tool for downloading iSulad images, written in go language
 %global debug_package %{nil}
 
 %prep
-%setup -q -b 0 -c -n %{name}-%{version}
+%setup -q -b 0 -c -n iSulad-kit-%{version}
 
 # apply the patchs
 cp ./patch/* ./

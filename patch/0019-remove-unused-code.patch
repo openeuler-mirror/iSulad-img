@@ -1,15 +1,15 @@
-From 03ba1cefff48ef2557e9734b0655cef355a0ce19 Mon Sep 17 00:00:00 2001
+From dc132438667cee33ed69021edb79118791913df1 Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Mon, 20 May 2019 10:45:55 -0400
-Subject: [PATCH 19/30] remove unused code
+Subject: [PATCH 19/31] remove unused code
 
 Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
 ---
- .../github.com/containers/storage/lockfile.go |  96 --------------
- .../containers/storage/lockfile_darwin.go     |  19 ---
- .../containers/storage/lockfile_linux.go      |  20 ---
- .../containers/storage/lockfile_unix.go       | 123 ------------------
- .../containers/storage/lockfile_windows.go    |  51 --------
+ vendor/github.com/containers/storage/lockfile.go   |  96 ----------------
+ .../containers/storage/lockfile_darwin.go          |  19 ----
+ .../containers/storage/lockfile_linux.go           |  20 ----
+ .../github.com/containers/storage/lockfile_unix.go | 123 ---------------------
+ .../containers/storage/lockfile_windows.go         |  51 ---------
  5 files changed, 309 deletions(-)
  delete mode 100644 vendor/github.com/containers/storage/lockfile.go
  delete mode 100644 vendor/github.com/containers/storage/lockfile_darwin.go
@@ -357,5 +357,5 @@ index 77490b8..0000000
 -	return when.Before(stat.ModTime())
 -}
 -- 
-2.22.0
+1.8.3.1
 

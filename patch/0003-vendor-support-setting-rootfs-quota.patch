@@ -1,14 +1,14 @@
-From 298e21d90af3e691fd862a26f99d80b615c996fc Mon Sep 17 00:00:00 2001
+From 030b795af1a2c3ef9a385ddf74e75b6300c62006 Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Tue, 9 Apr 2019 01:32:27 -0400
-Subject: [PATCH 03/30] vendor: support setting rootfs quota
+Subject: [PATCH 03/31] vendor: support setting rootfs quota
 
 Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
 ---
- .../storage/drivers/overlay/overlay.go        |  42 ++++-
- .../storage/drivers/quota/projectquota.go     | 173 ++++++++++++++++--
- vendor/github.com/containers/storage/store.go |   9 +-
- vendor/github.com/docker/go-units/size.go     |  10 +-
+ .../containers/storage/drivers/overlay/overlay.go  |  42 +++--
+ .../storage/drivers/quota/projectquota.go          | 173 ++++++++++++++++++---
+ vendor/github.com/containers/storage/store.go      |   9 +-
+ vendor/github.com/docker/go-units/size.go          |  10 +-
  4 files changed, 199 insertions(+), 35 deletions(-)
 
 diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
@@ -464,5 +464,5 @@ index b6485ed..2b47b66 100644
  	return int64(size), nil
  }
 -- 
-2.22.0
+1.8.3.1
 

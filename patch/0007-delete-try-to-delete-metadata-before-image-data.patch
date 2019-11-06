@@ -1,11 +1,11 @@
-From 64ae7232ec2c3ffe5cd71e1cfd60bf8162d6e829 Mon Sep 17 00:00:00 2001
+From f368f14a727eed69591a5166bd7482b35ea820f9 Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Thu, 18 Apr 2019 05:04:18 -0400
-Subject: [PATCH 07/30] delete: try to delete metadata before image data
+Subject: [PATCH 07/31] delete: try to delete metadata before image data
 
 Signed-off-by: LiFeng <lifeng68@huawei.com>
 ---
- .../github.com/containers/storage/layers.go   | 67 +++++++++----------
+ vendor/github.com/containers/storage/layers.go | 67 +++++++++++++-------------
  1 file changed, 33 insertions(+), 34 deletions(-)
 
 diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
@@ -100,5 +100,5 @@ index a6d90d3..0bb4b52 100644
  }
  
 -- 
-2.22.0
+1.8.3.1
 

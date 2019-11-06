@@ -1,7 +1,7 @@
-From a9ebdd6070bb6ab9906c9a5e5a7d6670d27d6ffe Mon Sep 17 00:00:00 2001
+From dc52742089f61557008f57c4c28aa0539a371193 Mon Sep 17 00:00:00 2001
 From: WuJing <wujing50@huawei.com>
 Date: Mon, 29 Apr 2019 16:46:09 +0800
-Subject: [PATCH 11/30] abnormal scene container restart failure
+Subject: [PATCH 11/31] abnormal scene container restart failure
 
 Solve the problem that the mountpoint.json write
 fails due to an abnormal condition, causing the container to fail to
@@ -38,5 +38,5 @@ index 8fcc4e2..e01cf23 100644
  	if options.MountLabel == "" {
  		options.MountLabel = layer.MountLabel
 -- 
-2.22.0
+1.8.3.1
 

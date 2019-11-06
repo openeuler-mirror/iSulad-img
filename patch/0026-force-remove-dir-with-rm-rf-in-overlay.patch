@@ -1,11 +1,11 @@
-From 304138c32d7926ac44d505720d68027d335dff5b Mon Sep 17 00:00:00 2001
+From 7c8a4f602f7bc9bea67fdb300af82dd46347f78d Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Thu, 18 Jul 2019 06:20:49 -0400
-Subject: [PATCH 26/30] force remove dir with rm -rf in overlay
+Subject: [PATCH 26/31] force remove dir with rm -rf in overlay
 
 Signed-off-by: LiFeng <lifeng68@huawei.com>
 ---
- .../containers/storage/drivers/overlay/overlay.go         | 8 ++------
+ vendor/github.com/containers/storage/drivers/overlay/overlay.go | 8 ++------
  1 file changed, 2 insertions(+), 6 deletions(-)
 
 diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
@@ -28,5 +28,5 @@ index a63f0d1..314722a 100644
  		}
  	}
 -- 
-2.22.0
+1.8.3.1
 

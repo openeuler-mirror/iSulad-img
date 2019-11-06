@@ -1,7 +1,7 @@
-From 4aa80a5ab6f3bb8efcca3b437929eecab28e2b43 Mon Sep 17 00:00:00 2001
+From ebe07e1941afb23e889e43046e1acac9dbce664d Mon Sep 17 00:00:00 2001
 From: LiuHao <liuhao27@huawei.com>
 Date: Thu, 2 May 2019 11:56:34 +0800
-Subject: [PATCH 13/30] fix compile error
+Subject: [PATCH 13/31] fix compile error
 
 fix compile error
 
@@ -24,5 +24,5 @@ index 4d5b9f8..b805e9a 100644
  		}
  		return result, nil
 -- 
-2.22.0
+1.8.3.1
 

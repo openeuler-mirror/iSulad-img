@@ -1,15 +1,15 @@
-From dbc7a5f3bb9cc61900e434d81d0dec05f531c4ce Mon Sep 17 00:00:00 2001
+From d84a118e62d49b99061ce26aa963b9b831d6b80d Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Thu, 4 Apr 2019 11:03:15 -0400
-Subject: [PATCH 02/30] add image integration check
+Subject: [PATCH 02/31] add image integration check
 
 Signed-off-by: LiFeng <lifeng68@huawei.com>
 ---
- .../storage/drivers/overlay/overlay.go        |  54 ++++-
- .../storage/drivers/overlay/randomid.go       |   7 +
- .../github.com/containers/storage/layers.go   |  96 +++++++++
- vendor/github.com/containers/storage/store.go | 190 ++++++++++++++++++
- .../opencontainers/go-digest/verifiers.go     |  13 ++
+ .../containers/storage/drivers/overlay/overlay.go  |  54 +++++-
+ .../containers/storage/drivers/overlay/randomid.go |   7 +
+ vendor/github.com/containers/storage/layers.go     |  96 +++++++++++
+ vendor/github.com/containers/storage/store.go      | 190 +++++++++++++++++++++
+ .../opencontainers/go-digest/verifiers.go          |  13 ++
  5 files changed, 358 insertions(+), 2 deletions(-)
 
 diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
@@ -490,5 +490,5 @@ index 32125e9..32e85d6 100644
  	digest Digest
  	hash   hash.Hash
 -- 
-2.22.0
+1.8.3.1
 

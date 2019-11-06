@@ -1,17 +1,17 @@
-From b6de10372ac832bcb2dbecbb97dac2cd73dac44d Mon Sep 17 00:00:00 2001
+From 3ff609060ab82a8f2f04f4c1ec64b4a7bd9fd092 Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Tue, 2 Apr 2019 23:37:17 -0400
-Subject: [PATCH 01/30] add image load time and append image names
+Subject: [PATCH 01/31] add image load time and append image names
 
 reason: 1. add image load time
         2. append image names when pull image
 
 Signed-off-by: LiFeng <lifeng68@huawei.com>
 ---
- .../containers/image/storage/storage_image.go | 31 ++++++----
- .../github.com/containers/storage/images.go   | 53 ++++++++++++++++
- .../containers/storage/images_ffjson.go       | 60 +++++++++++++++++++
- vendor/github.com/containers/storage/store.go | 42 +++++++++++++
+ .../containers/image/storage/storage_image.go      | 31 ++++++-----
+ vendor/github.com/containers/storage/images.go     | 53 +++++++++++++++++++
+ .../github.com/containers/storage/images_ffjson.go | 60 ++++++++++++++++++++++
+ vendor/github.com/containers/storage/store.go      | 42 +++++++++++++++
  4 files changed, 173 insertions(+), 13 deletions(-)
 
 diff --git a/vendor/github.com/containers/image/storage/storage_image.go b/vendor/github.com/containers/image/storage/storage_image.go
@@ -375,5 +375,5 @@ index a166799..b14af2d 100644
  	lstore, err := s.LayerStore()
  	if err != nil {
 -- 
-2.22.0
+1.8.3.1
 

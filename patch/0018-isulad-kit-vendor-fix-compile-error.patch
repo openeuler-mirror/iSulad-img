@@ -1,15 +1,15 @@
-From c4659966717b6039a64d7675122163033e2a8ef9 Mon Sep 17 00:00:00 2001
+From 81c2566dc4db679d35bd2c45413f1a1d61a7a4dc Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Mon, 20 May 2019 10:31:12 -0400
-Subject: [PATCH 18/30] isulad-kit-vendor: fix compile error
+Subject: [PATCH 18/31] isulad-kit-vendor: fix compile error
 
 Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
 ---
- .../storage/pkg/filelocker/lockfile.go        | 101 ++++++++++++++
- .../storage/pkg/filelocker/lockfile_darwin.go |  19 +++
- .../storage/pkg/filelocker/lockfile_linux.go  |  20 +++
- .../storage/pkg/filelocker/lockfile_unix.go   | 123 ++++++++++++++++++
- .../pkg/filelocker/lockfile_windows.go        |  51 ++++++++
+ .../containers/storage/pkg/filelocker/lockfile.go  | 101 +++++++++++++++++
+ .../storage/pkg/filelocker/lockfile_darwin.go      |  19 ++++
+ .../storage/pkg/filelocker/lockfile_linux.go       |  20 ++++
+ .../storage/pkg/filelocker/lockfile_unix.go        | 123 +++++++++++++++++++++
+ .../storage/pkg/filelocker/lockfile_windows.go     |  51 +++++++++
  5 files changed, 314 insertions(+)
  create mode 100644 vendor/github.com/containers/storage/pkg/filelocker/lockfile.go
  create mode 100644 vendor/github.com/containers/storage/pkg/filelocker/lockfile_darwin.go
@@ -362,5 +362,5 @@ index 0000000..438e34e
 +	return when.Before(stat.ModTime())
 +}
 -- 
-2.22.0
+1.8.3.1
 

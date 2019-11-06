@@ -1,12 +1,12 @@
-From e36955d16859d527a23ae7e951126024f63361c7 Mon Sep 17 00:00:00 2001
+From 147bddb78bd54d6dd42546e662abd0f1aa12240b Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Mon, 22 Jul 2019 03:52:09 -0400
-Subject: [PATCH 27/30] EnsureRemoveAll make retry count from 5 to 50
+Subject: [PATCH 27/31] EnsureRemoveAll make retry count from 5 to 50
 
 Signed-off-by: LiFeng <lifeng68@huawei.com>
 ---
- .../github.com/containers/storage/drivers/overlay/overlay.go   | 3 ++-
- vendor/github.com/containers/storage/pkg/system/rm.go          | 2 +-
+ vendor/github.com/containers/storage/drivers/overlay/overlay.go | 3 ++-
+ vendor/github.com/containers/storage/pkg/system/rm.go           | 2 +-
  2 files changed, 3 insertions(+), 2 deletions(-)
 
 diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
@@ -39,5 +39,5 @@ index fc03c3e..a8c685b 100644
  	// Attempt to unmount anything beneath this dir first
  	mount.RecursiveUnmount(dir)
 -- 
-2.22.0
+1.8.3.1
 

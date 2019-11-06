@@ -1,7 +1,7 @@
-From 50d558f03453bcc63e5e26387f46726ccdc7132a Mon Sep 17 00:00:00 2001
+From 47ab16750512a4615454154746fa376c18083730 Mon Sep 17 00:00:00 2001
 From: WuJing <wujing50@huawei.com>
 Date: Mon, 10 Jun 2019 10:54:43 +0800
-Subject: [PATCH 21/30] Fix file retention bug
+Subject: [PATCH 21/31] Fix file retention bug
 
 Signed-off-by: WuJing <wujing50@huawei.com>
 ---
@@ -35,5 +35,5 @@ index a466f05..b50dac7 100644
  		}
  	}
 -- 
-2.22.0
+1.8.3.1
 

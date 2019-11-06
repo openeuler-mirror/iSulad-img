@@ -1,7 +1,7 @@
-From e0767068949e7423ef66641a2558f92891a9824c Mon Sep 17 00:00:00 2001
+From 6f91d592950fe69879c7a1abe1be17fee32cc3c6 Mon Sep 17 00:00:00 2001
 From: LiuHao <liuhao27@huawei.com>
 Date: Thu, 2 May 2019 11:25:07 +0800
-Subject: [PATCH 12/30] optimize isulad_kit operator
+Subject: [PATCH 12/31] optimize isulad_kit operator
 
 get mountpoint from driver
 
@@ -31,5 +31,5 @@ index e01cf23..4d5b9f8 100644
  	return nil, ErrLayerUnknown
  }
 -- 
-2.22.0
+1.8.3.1
 

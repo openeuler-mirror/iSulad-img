@@ -1,11 +1,11 @@
-From 98d0c5b7880a9aef438f0b88c3a1f2620dd06402 Mon Sep 17 00:00:00 2001
+From 8bfecdd2b15904c5314d68b7fee0e55faac20e57 Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Tue, 16 Apr 2019 10:53:52 -0400
-Subject: [PATCH 06/30] limit the minimum size of rootfs quota to 4k
+Subject: [PATCH 06/31] limit the minimum size of rootfs quota to 4k
 
 Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
 ---
- .../github.com/containers/storage/drivers/overlay/overlay.go | 5 +++--
+ vendor/github.com/containers/storage/drivers/overlay/overlay.go | 5 +++--
  1 file changed, 3 insertions(+), 2 deletions(-)
 
 diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
@@ -25,5 +25,5 @@ index 26467d1..62fd5ed 100644
  			driver.options.quota.Size = uint64(size)
  		default:
 -- 
-2.22.0
+1.8.3.1
 

@@ -1,12 +1,12 @@
-From 31a7eaa9b154cedbcf23899ccc31026c8a5e4005 Mon Sep 17 00:00:00 2001
+From 98984411f69a7a051dbb916cddbe3b081ac9b3c0 Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Tue, 18 Jun 2019 14:12:33 +0800
-Subject: [PATCH 23/30] encrypt auth config and add lock
+Subject: [PATCH 23/31] encrypt auth config and add lock
 
 Signed-off-by: WangFengTu <wangfengtu@huawei.com>
 ---
- .../containers/image/pkg/docker/aes/aes.go    | 116 ++++++++++++++++++
- .../image/pkg/docker/config/config.go         |  62 ++++++++++
+ .../containers/image/pkg/docker/aes/aes.go         | 116 +++++++++++++++++++++
+ .../containers/image/pkg/docker/config/config.go   |  62 +++++++++++
  2 files changed, 178 insertions(+)
  create mode 100644 vendor/github.com/containers/image/pkg/docker/aes/aes.go
 
@@ -238,5 +238,5 @@ index 1f57625..3033f12 100644
  		if err != nil {
  			return errors.Wrapf(err, "error marshaling JSON %q", path)
 -- 
-2.22.0
+1.8.3.1
 

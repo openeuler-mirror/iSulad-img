@@ -1,11 +1,11 @@
-From 79a497152a2236991df0c0e4d54d9d174646b5e2 Mon Sep 17 00:00:00 2001
+From 37357b5a2affbd0b3dbde0d3ac414d1ce04f4743 Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Fri, 26 Jul 2019 05:02:55 -0400
-Subject: [PATCH 28/30] report error log when openDir failed
+Subject: [PATCH 28/31] report error log when openDir failed
 
 Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
 ---
- .../containers/storage/drivers/quota/projectquota.go          | 4 ++--
+ vendor/github.com/containers/storage/drivers/quota/projectquota.go | 4 ++--
  1 file changed, 2 insertions(+), 2 deletions(-)
 
 diff --git a/vendor/github.com/containers/storage/drivers/quota/projectquota.go b/vendor/github.com/containers/storage/drivers/quota/projectquota.go
@@ -25,5 +25,5 @@ index a160530..c90c46f 100644
  	return dir, nil
  }
 -- 
-2.22.0
+1.8.3.1
 

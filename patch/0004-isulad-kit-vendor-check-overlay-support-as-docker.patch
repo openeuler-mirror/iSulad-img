@@ -1,14 +1,14 @@
-From 7335fbc4bba8f4fc3e655c4f4978d95eabbaa16c Mon Sep 17 00:00:00 2001
+From 5ce25335fb947b62619b542714ce5f580c1636c9 Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Tue, 9 Apr 2019 12:19:49 -0400
-Subject: [PATCH 04/30] isulad-kit-vendor: check overlay support as docker
+Subject: [PATCH 04/31] isulad-kit-vendor: check overlay support as docker
 
 we may got failed if always detect multi lower layer mount,
 when writed data more than rootfs quota for arm machine
 
 Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
 ---
- .../storage/drivers/overlay/overlay.go        | 42 ++++++++++++-------
+ .../containers/storage/drivers/overlay/overlay.go  | 42 +++++++++++++---------
  1 file changed, 26 insertions(+), 16 deletions(-)
 
 diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
@@ -92,5 +92,5 @@ index 5561658..26467d1 100644
  		mergedDir := filepath.Join(layerDir, "merged")
  		lower1Dir := filepath.Join(layerDir, "lower1")
 -- 
-2.22.0
+1.8.3.1
 

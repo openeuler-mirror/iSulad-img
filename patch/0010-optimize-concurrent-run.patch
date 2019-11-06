@@ -1,15 +1,15 @@
-From cbcdb9000e1aed4ee28781fdb2066aafe474459a Mon Sep 17 00:00:00 2001
+From f8390b07d61c4ce03468a9fd15c043e09d49548a Mon Sep 17 00:00:00 2001
 From: LiuHao <liuhao27@huawei.com>
 Date: Thu, 25 Apr 2019 18:00:18 +0800
-Subject: [PATCH 10/30] optimize concurrent run
+Subject: [PATCH 10/31] optimize concurrent run
 
 Signed-off-by: LiuHao <liuhao27@huawei.com>
 ---
- .../containers/storage/containers.go          |  58 ++++++++--
- .../github.com/containers/storage/images.go   |  79 ++++++++++----
- .../github.com/containers/storage/layers.go   |  79 ++++++++++----
- .../github.com/containers/storage/lockfile.go |  11 ++
- vendor/github.com/containers/storage/store.go | 102 ++++++++++++++++--
+ vendor/github.com/containers/storage/containers.go |  58 ++++++++++--
+ vendor/github.com/containers/storage/images.go     |  79 ++++++++++++----
+ vendor/github.com/containers/storage/layers.go     |  79 ++++++++++++----
+ vendor/github.com/containers/storage/lockfile.go   |  11 +++
+ vendor/github.com/containers/storage/store.go      | 102 +++++++++++++++++++--
  5 files changed, 276 insertions(+), 53 deletions(-)
 
 diff --git a/vendor/github.com/containers/storage/containers.go b/vendor/github.com/containers/storage/containers.go
@@ -602,5 +602,5 @@ index df4205f..f27c4db 100644
  		return nil, err
  	}
 -- 
-2.22.0
+1.8.3.1
 
