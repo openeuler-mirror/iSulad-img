@@ -19,20 +19,20 @@ import (
 	"path"
 	"time"
 
-	"github.com/pkg/errors"
-	"github.com/urfave/cli"
-	"github.com/sirupsen/logrus"
 	"github.com/containers/storage"
+	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
+	"github.com/urfave/cli"
 )
 
 var (
 	containerName2 string
 )
 
-func getContainerStorageFsInfo(store storage.Store,containerpath string) (*FilesystemUsage, error) {
+func getContainerStorageFsInfo(store storage.Store, containerpath string) (*FilesystemUsage, error) {
 	rootPath := store.GraphRoot()
 	storageDriver := store.GraphDriverName()
-	containerPath := path.Join(rootPath, storageDriver,containerpath,"diff")
+	containerPath := path.Join(rootPath, storageDriver, containerpath, "diff")
 
 	bytesUsed, inodesUsed, err := GetDiskUsageStats(containerPath)
 	if err != nil {
@@ -82,7 +82,7 @@ func containerFilesystemUsageHandler(c *cli.Context) error {
 		return fmt.Errorf("failed to get container %s layerid: %v", containerName2, err)
 	}
 
-	fsUsage, err := getContainerStorageFsInfo(store,layerID)
+	fsUsage, err := getContainerStorageFsInfo(store, layerID)
 
 	if err != nil {
 		return err
@@ -112,7 +112,5 @@ var containerFilesystemUsageCmd = cli.Command{
 	`),
 	ArgsUsage: "[ID|NAME]",
 	Action:    containerFilesystemUsageHandler,
-	Flags: []cli.Flag{
-	},
+	Flags:     []cli.Flag{},
 }
-

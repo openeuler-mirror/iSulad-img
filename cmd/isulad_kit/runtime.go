@@ -18,101 +18,91 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/containers/image/copy"
-	istorage "github.com/containers/image/storage"
+	imstorage "github.com/containers/image/storage"
 	"github.com/containers/image/transports/alltransports"
 	"github.com/containers/image/types"
 	"github.com/containers/storage"
-	cstorage "github.com/containers/storage"
-	"github.com/containers/storage/pkg/idtools"
+	constorage "github.com/containers/storage"
 	"github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
 var (
-	// ErrInvalidPodName invalid pod name
-	ErrInvalidPodName = errors.New("invalid pod name")
-	// ErrInvalidImageName invalid image name
-	ErrInvalidImageName = errors.New("invalid image name")
-	// ErrInvalidContainerName invalid container name
-	ErrInvalidContainerName = errors.New("invalid container name")
-	// ErrInvalidSandboxID invalid sandbox ID
-	ErrInvalidSandboxID = errors.New("invalid sandbox ID")
-	// ErrInvalidContainerID invalid container ID
-	ErrInvalidContainerID = errors.New("invalid container ID")
+	// ErrImageName invalid image name
+	ErrImageName = errors.New("invalid image name")
+	// ErrContainerName invalid container name
+	ErrContainerName = errors.New("invalid container name")
+	// ErrContainerID invalid container ID
+	ErrContainerID = errors.New("invalid container ID")
 )
 
-type runtimeService struct {
-	storageImageServer ImageServer
-	pauseImage         string
-	ctx                context.Context
+type containerLifeService struct {
+	imageServer ImageServer
+	pauseImage  string
+	ctx         context.Context
 }
 
-// ContainerInfo ContainerInfo
-type ContainerInfo struct {
-	ID     string
-	Dir    string
-	RunDir string
-	Config *v1.Image
+// ContainerSpec ContainerSpec
+type ContainerSpec struct {
+	ID      string
+	RootDir string
+	RunDir  string
+	Config  *v1.Image
 }
 
-// RuntimeServer wraps up various CRI-related activities into a reusable
-// implementation.
-type RuntimeServer interface {
+// ContainerServer display all related operations
+type ContainerServer interface {
 	// GetContainer
 	GetContainerLayerID(id string) (string, error)
 	// CreateContainer
-	CreateContainer(systemContext *types.SystemContext, podName, podID, imageName, imageID, containerName, containerID, metadataName string, attempt uint32, mountLabel string, idMappings *idtools.IDMappings, storageOpts map[string]string, copyOptions *copy.Options) (ContainerInfo, error)
+	CreateContainer(systemContext *types.SystemContext, imageName, imageID, containerName, containerID string, storageOpts map[string]string) (ContainerSpec, error)
 	// RemoveContainer
-	RemoveContainer(idOrName string) error
+	RemoveContainer(containerID string) error
 	// UmountContainer
-	UmountContainer(idOrName string) error
+	UmountContainer(containerID string) error
 }
 
-func (r *runtimeService) createContainer(systemContext *types.SystemContext, podName, podID, imageName, imageID, containerName, containerID, metadataName, uid, namespace string, attempt uint32, mountLabel string, idMappings *idtools.IDMappings, storageOpts map[string]string, options *copy.Options) (ContainerInfo, error) {
+func (r *containerLifeService) createContainer(systemContext *types.SystemContext, imageName, imageID, containerName, containerID string, storageOpts map[string]string) (ContainerSpec, error) {
 	var ref types.ImageReference
-	if podName == "" || podID == "" {
-		return ContainerInfo{}, ErrInvalidPodName
-	}
+
 	if imageName == "" && imageID == "" {
-		return ContainerInfo{}, ErrInvalidImageName
+		return ContainerSpec{}, ErrImageName
 	}
 	if containerName == "" {
-		return ContainerInfo{}, ErrInvalidContainerName
-	}
-	if metadataName == "" {
-		metadataName = containerName
+		return ContainerSpec{}, ErrContainerName
 	}
 
-	ref, err := istorage.Transport.ParseStoreReference(r.storageImageServer.GetStore(), imageName)
+	metadataName := containerName
+
+	ref, err := imstorage.Transport.ParseStoreReference(r.imageServer.GetStore(), imageName)
 	if err != nil {
 		otherRef, err2 := alltransports.ParseImageName(imageName)
 		if err2 == nil && otherRef.DockerReference() != nil {
-			ref, err = istorage.Transport.ParseStoreReference(r.storageImageServer.GetStore(), otherRef.DockerReference().Name())
+			ref, err = imstorage.Transport.ParseStoreReference(r.imageServer.GetStore(), otherRef.DockerReference().Name())
 		}
 		if err != nil {
-			ref, err = istorage.Transport.ParseStoreReference(r.storageImageServer.GetStore(), "@"+imageID)
+			ref, err = imstorage.Transport.ParseStoreReference(r.imageServer.GetStore(), "@"+imageID)
 			if err != nil {
-				return ContainerInfo{}, err
+				return ContainerSpec{}, err
 			}
 		}
 	}
 
-	img, err := istorage.Transport.GetStoreImage(r.storageImageServer.GetStore(), ref)
+	img, err := imstorage.Transport.GetStoreImage(r.imageServer.GetStore(), ref)
 	if err != nil {
-		return ContainerInfo{}, err
+		return ContainerSpec{}, err
 	}
 
 	image, err := ref.NewImage(r.ctx, systemContext)
 	if err != nil {
-		return ContainerInfo{}, err
+		return ContainerSpec{}, err
 	}
 	defer image.Close()
 
 	imageConfig, err := image.OCIConfig(r.ctx)
 	if err != nil {
-		return ContainerInfo{}, err
+		return ContainerSpec{}, err
 	}
 
 	if imageName == "" && len(img.Names) > 0 {
@@ -120,23 +110,23 @@ func (r *runtimeService) createContainer(systemContext *types.SystemContext, pod
 	}
 	imageID = img.ID
 
-	metadata := cstorage.RuntimeContainerMetadata{
-		Pod:           containerID == podID,
-		PodName:       podName,
-		PodID:         podID,
+	metadata := constorage.RuntimeContainerMetadata{
+		Pod:           false,
+		PodName:       containerName,
+		PodID:         containerName,
 		ImageName:     imageName,
 		ImageID:       imageID,
 		ContainerName: containerName,
 		MetadataName:  metadataName,
-		UID:           uid,
-		Namespace:     namespace,
-		Attempt:       attempt,
+		UID:           "",
+		Namespace:     "",
+		Attempt:       0,
 		CreatedAt:     time.Now().Unix(),
-		MountLabel:    mountLabel,
+		MountLabel:    "",
 	}
 	mdata, err := json.Marshal(&metadata)
 	if err != nil {
-		return ContainerInfo{}, err
+		return ContainerSpec{}, err
 	}
 
 	names := []string{metadata.ContainerName}
@@ -144,83 +134,81 @@ func (r *runtimeService) createContainer(systemContext *types.SystemContext, pod
 		names = append(names, metadata.PodName)
 	}
 
-	coptions := &cstorage.ContainerOptions{}
-	if idMappings != nil {
-		coptions.IDMappingOptions = cstorage.IDMappingOptions{UIDMap: idMappings.UIDs(), GIDMap: idMappings.GIDs()}
-	}
+	coptions := &constorage.ContainerOptions{}
 
 	coptions.Flags = make(map[string]interface{})
 	if storageOpts != nil {
 		coptions.Flags["StorageOpts"] = storageOpts
 	}
 
-	container, err := r.storageImageServer.GetStore().CreateContainer(containerID, names, img.ID, "", string(mdata), coptions)
+	container, err := r.imageServer.GetStore().CreateContainer(containerID, names, img.ID, "", string(mdata), coptions)
 	if err != nil {
-		return ContainerInfo{}, err
+		return ContainerSpec{}, err
 	}
 
 	defer func() {
 		if err != nil {
-			if err2 := r.storageImageServer.GetStore().DeleteContainer(container.ID); err2 != nil {
+			if err2 := r.imageServer.GetStore().DeleteContainer(container.ID); err2 != nil {
 				return
 			}
 		}
 	}()
 
 	layerName := metadata.ContainerName + "-layer"
-	names, err = r.storageImageServer.GetStore().Names(container.LayerID)
+	names, err = r.imageServer.GetStore().Names(container.LayerID)
 	if err != nil {
-		return ContainerInfo{}, err
+		return ContainerSpec{}, err
 	}
 	names = append(names, layerName)
-	err = r.storageImageServer.GetStore().SetNames(container.LayerID, names)
+	err = r.imageServer.GetStore().SetNames(container.LayerID, names)
 	if err != nil {
-		return ContainerInfo{}, err
+		return ContainerSpec{}, err
 	}
 
-	containerDir, err := r.storageImageServer.GetStore().ContainerDirectory(container.ID)
+	containerRootDir, err := r.imageServer.GetStore().ContainerDirectory(container.ID)
 	if err != nil {
-		return ContainerInfo{}, err
+		return ContainerSpec{}, err
 	}
 
-	containerRunDir, err := r.storageImageServer.GetStore().ContainerRunDirectory(container.ID)
+	containerRunDir, err := r.imageServer.GetStore().ContainerRunDirectory(container.ID)
 	if err != nil {
-		return ContainerInfo{}, err
+		return ContainerSpec{}, err
 	}
 
-	return ContainerInfo{
-		ID:     container.ID,
-		Dir:    containerDir,
-		RunDir: containerRunDir,
-		Config: imageConfig,
+	return ContainerSpec{
+		ID:      container.ID,
+		RootDir: containerRootDir,
+		RunDir:  containerRunDir,
+		Config:  imageConfig,
 	}, nil
 }
 
-func (r *runtimeService) CreateContainer(systemContext *types.SystemContext, podName, podID, imageName, imageID, containerName, containerID, metadataName string, attempt uint32, mountLabel string, idMappings *idtools.IDMappings, storageOpts map[string]string, copyOptions *copy.Options) (ContainerInfo, error) {
-	return r.createContainer(systemContext, podName, podID, imageName, imageID, containerName, containerID, metadataName, "", "", attempt, mountLabel, idMappings, storageOpts, copyOptions)
+func (r *containerLifeService) CreateContainer(systemContext *types.SystemContext, imageName, imageID, containerName, containerID string, storageOpts map[string]string) (ContainerSpec, error) {
+	return r.createContainer(systemContext, imageName, imageID, containerName, containerID, storageOpts)
 }
 
-func (r *runtimeService) RemoveContainer(idOrName string) error {
-	if idOrName == "" {
-		return ErrInvalidContainerID
+func (r *containerLifeService) RemoveContainer(containerID string) error {
+	if containerID == "" {
+		return ErrContainerID
 	}
-	container, err := r.storageImageServer.GetStore().Container(idOrName)
+	container, err := r.imageServer.GetStore().Container(containerID)
 	if err != nil {
 		return err
 	}
-	err = r.storageImageServer.GetStore().DeleteContainer(container.ID)
+	err = r.imageServer.GetStore().DeleteContainer(container.ID)
 	if err != nil {
 		logrus.Debugf("failed to delete container %q: %v", container.ID, err)
 		return err
 	}
+	logrus.Debugf("container %q deleted", container.ID)
 	return nil
 }
 
-func (r *runtimeService) GetContainerLayerID(id string) (string, error) {
-	container, err := r.storageImageServer.GetStore().Container(id)
+func (r *containerLifeService) GetContainerLayerID(id string) (string, error) {
+	container, err := r.imageServer.GetStore().Container(id)
 	if err != nil {
 		if errors.Cause(err) == storage.ErrContainerUnknown {
-			return "", ErrInvalidContainerID
+			return "", ErrContainerID
 		}
 		return "", err
 	}
@@ -228,28 +216,28 @@ func (r *runtimeService) GetContainerLayerID(id string) (string, error) {
 	return container.LayerID, nil
 }
 
-func (r *runtimeService) UmountContainer(idOrName string) error {
-	if idOrName == "" {
-		return ErrInvalidContainerID
+func (r *containerLifeService) UmountContainer(containerID string) error {
+	if containerID == "" {
+		return ErrContainerID
 	}
-	container, err := r.storageImageServer.GetStore().Container(idOrName)
+	container, err := r.imageServer.GetStore().Container(containerID)
 	if err != nil {
 		return err
 	}
-	_, err = r.storageImageServer.GetStore().Unmount(container.ID, false)
+	_, err = r.imageServer.GetStore().Unmount(container.ID, false)
 	if err != nil {
 		logrus.Debugf("failed to unmount container %q: %v", container.ID, err)
 		return err
 	}
-	logrus.Debugf("unmounted container %q", container.ID)
+	logrus.Debugf("container %q unmounted", container.ID)
 	return nil
 }
 
-// GetRuntimeService returns a RuntimeServer
-func GetRuntimeService(ctx context.Context, storageImageServer ImageServer, pauseImage string) RuntimeServer {
-	return &runtimeService{
-		storageImageServer: storageImageServer,
-		pauseImage:         pauseImage,
-		ctx:                ctx,
+// GetContainerLifeService returns a ContainerServer
+func GetContainerLifeService(ctx context.Context, imageServer ImageServer, pauseImage string) ContainerServer {
+	return &containerLifeService{
+		imageServer: imageServer,
+		pauseImage:  pauseImage,
+		ctx:         ctx,
 	}
 }

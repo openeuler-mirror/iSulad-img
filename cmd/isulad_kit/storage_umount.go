@@ -54,5 +54,5 @@ var storageUmountCmd = cli.Command{
 	`),
 	ArgsUsage: " ",
 	Action:    storageUmountHandler,
-	Flags: []cli.Flag{},
+	Flags:     []cli.Flag{},
 }

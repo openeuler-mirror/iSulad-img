@@ -105,21 +105,21 @@ func pullHandler(c *cli.Context) error {
 		images []string
 		pulled string
 	)
-	images, err = imageService.ResolveNames(image)
+	images, err = imageService.ParseImageNames(image)
 	if err != nil {
 		return err
 	}
 
 	for _, img := range images {
 		var tmpImg types.Image
-		tmpImg, err = imageService.PrepareImage(img, options)
+		tmpImg, err = imageService.InitImage(img, options)
 		if err != nil {
 			logrus.Debugf("error preparing image %s: %v", img, err)
 			continue
 		}
 
-		var storedImage *ImageResult
-		storedImage, err = imageService.ImageStatus(&types.SystemContext{}, img)
+		var storedImage *ImageBasicSpec
+		storedImage, err = imageService.GetOneImage(&types.SystemContext{}, img)
 		if err == nil {
 			tmpImgConfigDigest := tmpImg.ConfigInfo().Digest
 			if tmpImgConfigDigest.String() == "" {
@@ -143,7 +143,7 @@ func pullHandler(c *cli.Context) error {
 	if pulled == "" && err != nil {
 		return err
 	}
-	status, err := imageService.ImageStatus(&types.SystemContext{}, pulled)
+	status, err := imageService.GetOneImage(&types.SystemContext{}, pulled)
 	if err != nil {
 		return err
 	}

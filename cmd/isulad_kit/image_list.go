@@ -71,7 +71,7 @@ func imagesHandler(c *cli.Context) error {
 		}
 	}
 
-	results, err := imageService.ListImages(&types.SystemContext{}, filter)
+	results, err := imageService.GetAllImages(&types.SystemContext{}, filter)
 	if err != nil {
 		return err
 	}

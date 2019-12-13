@@ -164,12 +164,12 @@ func getEmptyStorageStore(c *cli.Context) (cstorage.Store, error) {
 }
 
 func getImageService(ctx context.Context, c *cli.Context, store cstorage.Store) (ImageServer, error) {
-	return GetImageService(ctx, store, defaultTransport,
+	return InitImageService(ctx, store, defaultTransport,
 		c.GlobalStringSlice("insecure-registry"), c.GlobalStringSlice("registry"))
 }
 
-func getRuntimeService(ctx context.Context, pauseImage string, imageService ImageServer) RuntimeServer {
-	return GetRuntimeService(ctx, imageService, pauseImage)
+func getRuntimeService(ctx context.Context, pauseImage string, imageService ImageServer) ContainerServer {
+	return GetContainerLifeService(ctx, imageService, pauseImage)
 }
 
 // getPolicyContext handles the global "policy" flag.

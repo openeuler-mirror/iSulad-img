@@ -75,9 +75,9 @@ func containerPrepareHandler(c *cli.Context) error {
 		return errors.New("Failed to get storageRuntimeService")
 	}
 
-	images, err := imageService.ResolveNames(containerImageName)
+	images, err := imageService.ParseImageNames(containerImageName)
 	if err != nil {
-		if err == ErrCannotParseImageID {
+		if err == ErrParseImageID {
 			images = append(images, containerImageName)
 		} else {
 			return err
@@ -86,17 +86,17 @@ func containerPrepareHandler(c *cli.Context) error {
 
 	// Get imageName and imageRef that are later requested in container status
 	var (
-		imgResult    *ImageResult
-		imgResultErr error
+		imgBasicSpec    *ImageBasicSpec
+		imgBasicSpecErr error
 	)
 	for _, img := range images {
-		imgResult, imgResultErr = imageService.ImageStatus(&types.SystemContext{}, img)
-		if imgResultErr == nil {
+		imgBasicSpec, imgBasicSpecErr = imageService.GetOneImage(&types.SystemContext{}, img)
+		if imgBasicSpecErr == nil {
 			break
 		}
 	}
-	if imgResultErr != nil {
-		return imgResultErr
+	if imgBasicSpecErr != nil {
+		return imgBasicSpecErr
 	}
 
 	storageOpts, err := getStorageOptions(c)
@@ -105,15 +105,9 @@ func containerPrepareHandler(c *cli.Context) error {
 	}
 
 	containerInfo, err := storageRuntimeService.CreateContainer(&types.SystemContext{},
-		containerName, containerName,
-		containerImageName, imgResult.ID,
+		containerImageName, imgBasicSpec.ID,
 		containerName, containerID,
-		"",
-		0,
-		"",
-		nil,
-		storageOpts,
-		nil)
+		storageOpts)
 	if err != nil {
 		return err
 	}

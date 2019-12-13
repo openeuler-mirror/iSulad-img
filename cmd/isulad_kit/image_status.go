@@ -92,9 +92,9 @@ func imageStatusHandler(c *cli.Context) error {
 		return err
 	}
 
-	images, err := imageService.ResolveNames(imageName)
+	images, err := imageService.ParseImageNames(imageName)
 	if err != nil {
-		if err == ErrCannotParseImageID {
+		if err == ErrParseImageID {
 			images = append(images, imageName)
 		} else {
 			return err
@@ -107,7 +107,7 @@ func imageStatusHandler(c *cli.Context) error {
 	)
 	resp := &imageStatusResponse{}
 	for _, image := range images {
-		status, err := imageService.ImageStatus(&types.SystemContext{}, image)
+		status, err := imageService.GetOneImage(&types.SystemContext{}, image)
 		if err != nil {
 			if errors.Cause(err) == storage.ErrImageUnknown {
 				logrus.Warnf("imageStatus: can't find %s", image)

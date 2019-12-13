@@ -49,9 +49,9 @@ func imageRemoveHandler(c *cli.Context) error {
 		return err
 	}
 
-	images, err := imageService.ResolveNames(imageName)
+	images, err := imageService.ParseImageNames(imageName)
 	if err != nil {
-		if err == ErrCannotParseImageID {
+		if err == ErrParseImageID {
 			images = append(images, imageName)
 		} else {
 			return err
@@ -61,7 +61,7 @@ func imageRemoveHandler(c *cli.Context) error {
 	var deleted bool
 
 	for _, img := range images {
-		err = imageService.UntagImage(&types.SystemContext{}, img)
+		err = imageService.UnrefImage(&types.SystemContext{}, img)
 		if err != nil {
 			logrus.Debugf("error deleting image %s: %v", img, err)
 			continue

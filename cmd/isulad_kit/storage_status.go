@@ -61,5 +61,5 @@ var storageStatusCmd = cli.Command{
 	`),
 	ArgsUsage: " ",
 	Action:    storageStatusHandler,
-	Flags: []cli.Flag{},
+	Flags:     []cli.Flag{},
 }
