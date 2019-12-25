@@ -1,34 +1,25 @@
-From 244483ca37d64b35a7a6ec986bb75375006bb9cd Mon Sep 17 00:00:00 2001
+From 32579f4ae43186e4e5d17c20344bb8d7fb83ac72 Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Sun, 7 Jul 2019 22:41:58 -0400
-Subject: [PATCH 25/31] add cbb_adapt files as patch
+Subject: [PATCH 25/37] add cbb_adapt files as patch
 
 Signed-off-by: LiFeng <lifeng68@huawei.com>
 ---
- vendor/pkg/gopkgs/cbb_adapt/CheckList              |    1 +
- vendor/pkg/gopkgs/cbb_adapt/README.md              |   82 ++
- .../pkg/gopkgs/cbb_adapt/doc/crypto_cbb_desion.md  |  243 +++++
- .../cbb_adapt/src/go/aeswithkey/aeswithkey.go      | 1022 ++++++++++++++++++++
- .../pkg/gopkgs/cbb_adapt/src/go/gcrypto/gcrypto.go |   55 ++
- .../pkg/gopkgs/cbb_adapt/src/go/pbkdf2/pbkdf2.go   |   57 ++
- 6 files changed, 1460 insertions(+)
- create mode 100644 vendor/pkg/gopkgs/cbb_adapt/CheckList
+ vendor/pkg/gopkgs/cbb_adapt/README.md         |   82 ++
+ .../gopkgs/cbb_adapt/doc/crypto_cbb_desion.md |  243 ++++
+ .../cbb_adapt/src/go/aeswithkey/aeswithkey.go | 1022 +++++++++++++++++
+ .../cbb_adapt/src/go/gcrypto/gcrypto.go       |   55 +
+ .../gopkgs/cbb_adapt/src/go/pbkdf2/pbkdf2.go  |   57 +
+ 5 files changed, 1459 insertions(+)
  create mode 100644 vendor/pkg/gopkgs/cbb_adapt/README.md
  create mode 100644 vendor/pkg/gopkgs/cbb_adapt/doc/crypto_cbb_desion.md
  create mode 100644 vendor/pkg/gopkgs/cbb_adapt/src/go/aeswithkey/aeswithkey.go
  create mode 100644 vendor/pkg/gopkgs/cbb_adapt/src/go/gcrypto/gcrypto.go
  create mode 100644 vendor/pkg/gopkgs/cbb_adapt/src/go/pbkdf2/pbkdf2.go
 
-diff --git a/vendor/pkg/gopkgs/cbb_adapt/CheckList b/vendor/pkg/gopkgs/cbb_adapt/CheckList
-new file mode 100644
-index 0000000..8279386
---- /dev/null
-+++ b/vendor/pkg/gopkgs/cbb_adapt/CheckList
-@@ -0,0 +1 @@
-+cpoied form http://code.huawei.com/paas-security/cbb_adapt/tree/psm, commit e188b5ea503d6eb7dd34ab25bbadcb3cc0a7307b keloyang
 diff --git a/vendor/pkg/gopkgs/cbb_adapt/README.md b/vendor/pkg/gopkgs/cbb_adapt/README.md
 new file mode 100644
-index 0000000..f6c468e
+index 0000000..8abc50a
 --- /dev/null
 +++ b/vendor/pkg/gopkgs/cbb_adapt/README.md
 @@ -0,0 +1,82 @@
@@ -51,8 +42,8 @@ index 0000000..f6c468e
 +import (
 +    "fmt"
 +
-+    _ "code.huawei.com/gopkgs/cbb_adapt/src/go/aeswithkey"
-+    "code.huawei.com/gopkgs/cbb_adapt/src/go/gcrypto"
++    _ "pkg/gopkgs/cbb_adapt/src/go/aeswithkey"
++    "pkg/gopkgs/cbb_adapt/src/go/gcrypto"
 +)
 +
 +func main() {
@@ -365,11 +356,11 @@ index 0000000..c7349cd
 +
 diff --git a/vendor/pkg/gopkgs/cbb_adapt/src/go/aeswithkey/aeswithkey.go b/vendor/pkg/gopkgs/cbb_adapt/src/go/aeswithkey/aeswithkey.go
 new file mode 100644
-index 0000000..bd7bc19
+index 0000000..1db2511
 --- /dev/null
 +++ b/vendor/pkg/gopkgs/cbb_adapt/src/go/aeswithkey/aeswithkey.go
 @@ -0,0 +1,1022 @@
-+// Copyright (c) Huawei Technologies Co., Ltd. 2018-2019. All rights reserved.
++// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 +// iSulad-kit licensed under the Mulan PSL v1.
 +// You can use this software according to the terms and conditions of the Mulan PSL v1.
 +// You may obtain a copy of Mulan PSL v1 at:
@@ -1393,11 +1384,11 @@ index 0000000..bd7bc19
 +}
 diff --git a/vendor/pkg/gopkgs/cbb_adapt/src/go/gcrypto/gcrypto.go b/vendor/pkg/gopkgs/cbb_adapt/src/go/gcrypto/gcrypto.go
 new file mode 100644
-index 0000000..2021da6
+index 0000000..7a03e5f
 --- /dev/null
 +++ b/vendor/pkg/gopkgs/cbb_adapt/src/go/gcrypto/gcrypto.go
 @@ -0,0 +1,55 @@
-+// Copyright (c) Huawei Technologies Co., Ltd. 2018-2019. All rights reserved.
++// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 +// iSulad-kit licensed under the Mulan PSL v1.
 +// You can use this software according to the terms and conditions of the Mulan PSL v1.
 +// You may obtain a copy of Mulan PSL v1 at:
@@ -1454,11 +1445,11 @@ index 0000000..2021da6
 +}
 diff --git a/vendor/pkg/gopkgs/cbb_adapt/src/go/pbkdf2/pbkdf2.go b/vendor/pkg/gopkgs/cbb_adapt/src/go/pbkdf2/pbkdf2.go
 new file mode 100644
-index 0000000..c5e954d
+index 0000000..4580495
 --- /dev/null
 +++ b/vendor/pkg/gopkgs/cbb_adapt/src/go/pbkdf2/pbkdf2.go
 @@ -0,0 +1,57 @@
-+// Copyright (c) Huawei Technologies Co., Ltd. 2018-2019. All rights reserved.
++// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 +// iSulad-kit licensed under the Mulan PSL v1.
 +// You can use this software according to the terms and conditions of the Mulan PSL v1.
 +// You may obtain a copy of Mulan PSL v1 at:
@@ -1516,5 +1507,5 @@ index 0000000..c5e954d
 +	return numAll[:keyLen]
 +}
 -- 
-1.8.3.1
+2.19.1
 

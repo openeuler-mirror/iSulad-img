@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -16,6 +16,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"path"
 	"strings"
@@ -46,6 +47,10 @@ var (
 	ErrParseImageID = errors.New("cannot parse an image ID")
 	// ErrRegistriesConfigure no registries configured
 	ErrRegistriesConfigure = errors.New(`registries configured error`)
+
+	forceSecureIgnore        = 0
+	forceSecureTLSVerify     = 1
+	forceSecureSkipTLSVerify = 2
 )
 
 // HealthConfig means healtch check config in image
@@ -105,6 +110,11 @@ type imageService struct {
 	ctx                  context.Context
 }
 
+type parsedImageNames struct {
+	name        string
+	forceSecure int
+}
+
 // sizer knows its size.
 type sizer interface {
 	Size() (int64, error)
@@ -113,9 +123,9 @@ type sizer interface {
 // ImageServer wraps up various implementation.
 type ImageServer interface {
 	// InitImage returns an Image
-	InitImage(imageName string, options *copy.Options) (types.Image, error)
+	InitImage(image parsedImageNames, options *copy.Options) (types.Image, error)
 	// PullImage pull an image
-	PullImage(systemContext *types.SystemContext, imageName string, options *copy.Options) (types.ImageReference, error)
+	PullImage(systemContext *types.SystemContext, image parsedImageNames, dstImage string, options *copy.Options) (types.ImageReference, error)
 	// CheckImages
 	CheckImages(systemContext *types.SystemContext) error
 	// GetAllImages returns all images matches the filter
@@ -127,13 +137,13 @@ type ImageServer interface {
 	// GetStore returns storage store
 	GetStore() storage.Store
 	// ParseImageNames parses an image
-	ParseImageNames(imageName string) ([]string, error)
+	ParseImageNames(imageName string) ([]parsedImageNames, error)
 	// IsSecureIndex check if indexName is insecure
 	IsSecureIndex(indexName string) bool
 }
 
-func (svc *imageService) InitImage(imageName string, options *copy.Options) (types.Image, error) {
-	srcRef, err := svc.initReference(imageName, options)
+func (svc *imageService) InitImage(image parsedImageNames, options *copy.Options) (types.Image, error) {
+	srcRef, err := svc.initReference(image.name, image.forceSecure, options)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +155,7 @@ func (svc *imageService) InitImage(imageName string, options *copy.Options) (typ
 	return srcRef.NewImage(svc.ctx, srcCtx)
 }
 
-func (svc *imageService) PullImage(systemContext *types.SystemContext, imageName string, options *copy.Options) (types.ImageReference, error) {
+func (svc *imageService) PullImage(systemContext *types.SystemContext, image parsedImageNames, dstImage string, options *copy.Options) (types.ImageReference, error) {
 	policy, err := signature.DefaultPolicy(systemContext)
 	if err != nil {
 		return nil, err
@@ -158,12 +168,12 @@ func (svc *imageService) PullImage(systemContext *types.SystemContext, imageName
 		options = &copy.Options{}
 	}
 
-	srcRef, err := svc.initReference(imageName, options)
+	srcRef, err := svc.initReference(image.name, image.forceSecure, options)
 	if err != nil {
 		return nil, err
 	}
 
-	destRef, err := svc.makeDestRef(srcRef, imageName)
+	destRef, err := svc.makeDestRef(dstImage)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +278,7 @@ func (svc *imageService) UnrefImage(systemContext *types.SystemContext, imageNam
 	}
 
 	if !strings.HasPrefix(img.ID, imageName) {
-		namedRef, err := svc.initReference(imageName, &copy.Options{})
+		namedRef, err := svc.initReference(imageName, forceSecureIgnore, &copy.Options{})
 		if err != nil {
 			return err
 		}
@@ -316,33 +326,44 @@ func (svc *imageService) IsSecureIndex(indexName string) bool {
 	return true
 }
 
-func (svc *imageService) ParseImageNames(imageName string) ([]string, error) {
+func (svc *imageService) ParseImageNames(imageName string) ([]parsedImageNames, error) {
 	if len(imageName) >= minIDLength && svc.store != nil {
 		if img, err := svc.store.Image(imageName); err == nil && img != nil && strings.HasPrefix(img.ID, imageName) {
-			return []string{img.ID}, nil
+			return []parsedImageNames{{img.ID, forceSecureIgnore}}, nil
 		}
 	}
-	_, err := reference.ParseNormalizedNamed(imageName)
+	named, err := reference.ParseNormalizedNamed(imageName)
 	if err != nil {
 		if strings.Contains(err.Error(), "cannot specify 64-byte hexadecimal strings") {
 			return nil, ErrParseImageID
 		}
 		return nil, err
 	}
-	domain, remainder := parseDockerDomain(imageName)
+	domain, _ := parseDockerDomain(imageName)
 	if domain != "" {
-		return []string{imageName}, nil
+		return []parsedImageNames{{imageName, forceSecureIgnore}}, nil
 	}
 	if len(svc.registries) == 0 {
-		return nil, ErrRegistriesConfigure
+		return nil, fmt.Errorf("image %v has no domain and no registry-mirror found", imageName)
 	}
-	images := []string{}
+	var images []parsedImageNames
 	for _, r := range svc.registries {
-		rem := remainder
-		if r == "docker.io" && !strings.ContainsRune(remainder, '/') {
-			rem = "library/" + rem
+		var image parsedImageNames
+		if strings.HasPrefix(r, "https://") {
+			image.forceSecure = forceSecureTLSVerify
+		} else if strings.HasPrefix(r, "http://") {
+			image.forceSecure = forceSecureSkipTLSVerify
+		} else {
+			image.forceSecure = forceSecureIgnore
 		}
-		images = append(images, path.Join(r, rem))
+		r = strings.TrimPrefix(strings.TrimPrefix(r, "https://"), "http://")
+		tagged, ok := reference.TagNameOnly(named).(reference.Tagged)
+		if !ok {
+			return nil, fmt.Errorf("Add tag for image %v failed", imageName)
+		}
+		image.name = path.Join(r, reference.Path(named)+":"+tagged.Tag())
+		logrus.Debugf("before parse [%v], after parse [%v]", imageName, image.name)
+		images = append(images, image)
 	}
 	return images, nil
 }
@@ -554,7 +575,7 @@ func getImageDigest(ctx context.Context, image types.ImageSource, instanceDigest
 }
 
 // initReference init an image reference
-func (svc *imageService) initReference(imageName string, options *copy.Options) (types.ImageReference, error) {
+func (svc *imageService) initReference(imageName string, forceSecure int, options *copy.Options) (types.ImageReference, error) {
 	if imageName == "" {
 		return nil, storage.ErrNotAnImage
 	}
@@ -575,28 +596,23 @@ func (svc *imageService) initReference(imageName string, options *copy.Options) 
 		options.SourceCtx = &types.SystemContext{}
 	}
 
-	if srcRef.DockerReference() != nil {
-		hostname := reference.Domain(srcRef.DockerReference())
-		if secure := svc.IsSecureIndex(hostname); !secure {
-			options.SourceCtx.DockerInsecureSkipTLSVerify = types.NewOptionalBool(!secure)
+	if forceSecure == forceSecureTLSVerify {
+		options.SourceCtx.DockerInsecureSkipTLSVerify = types.NewOptionalBool(false)
+	} else if forceSecure == forceSecureSkipTLSVerify {
+		options.SourceCtx.DockerInsecureSkipTLSVerify = types.NewOptionalBool(true)
+	} else {
+		if srcRef.DockerReference() != nil {
+			hostname := reference.Domain(srcRef.DockerReference())
+			if secure := svc.IsSecureIndex(hostname); !secure {
+				options.SourceCtx.DockerInsecureSkipTLSVerify = types.NewOptionalBool(!secure)
+			}
 		}
 	}
 
 	return srcRef, nil
 }
 
-func (svc *imageService) makeDestRef(srcRef types.ImageReference, imageName string) (types.ImageReference, error) {
-	destImage := imageName
-	if srcRef.DockerReference() != nil {
-		destImage = srcRef.DockerReference().Name()
-		if tagged, ok := srcRef.DockerReference().(reference.NamedTagged); ok {
-			destImage = destImage + ":" + tagged.Tag()
-		}
-		if canonical, ok := srcRef.DockerReference().(reference.Canonical); ok {
-			destImage = destImage + "@" + canonical.Digest().String()
-		}
-	}
-
+func (svc *imageService) makeDestRef(destImage string) (types.ImageReference, error) {
 	return imstorage.Transport.ParseStoreReference(svc.store, destImage)
 }
 

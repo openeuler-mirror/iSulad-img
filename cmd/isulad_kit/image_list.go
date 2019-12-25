@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -16,6 +16,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -45,46 +46,68 @@ func getUserFromImage(user string) (*int64, string) {
 }
 
 func imagesHandler(c *cli.Context) error {
-
 	filter := ""
 	if c.IsSet("filter") {
 		filter = c.String("filter")
 	}
 
-	store, err := getStorageStore(true, c)
+	gopts, err := getGlobalOptions(c)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := commandTimeoutContextFromGlobalOptions(c)
-	defer cancel()
-
-	imageService, err := getImageService(ctx, c, store)
+	var resp *listImagesResponse
+	sockAddr, err := isDaemonInstanceExist(defaultInfoFile)
+	if strings.Contains(err.Error(), daemonInstanceExist) {
+		resp, err = grpcCliImages(sockAddr, filter, c.Bool("check"))
+	} else if os.IsNotExist(err) {
+		resp, err = listImages(gopts, filter, c.Bool("check"))
+	}
 	if err != nil {
 		return err
 	}
 
-	if c.Bool("check") {
+	data, err := json.Marshal(resp)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%s\n", data)
+
+	return err
+}
+
+func listImages(gopts *globalOptions, filter string, check bool) (*listImagesResponse, error) {
+	imageService, err := getImageService(gopts)
+	if err != nil {
+		return nil, err
+	}
+
+	if check {
 		err = imageService.CheckImages(&types.SystemContext{})
 		if err != nil {
-			return err
+			return nil, err
 		}
+	}
+
+	store, err := getStorageStore(gopts)
+	if err != nil {
+		return nil, err
 	}
 
 	results, err := imageService.GetAllImages(&types.SystemContext{}, filter)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	resp := &listImagesResponse{}
 	for _, result := range results {
 		imageConfig, err := getImageConf(store, result.ID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		healthcheck, err := getHealthcheck(store, result.ID)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		resImg := &Image{
 			ID:          result.ID,
@@ -107,13 +130,7 @@ func imagesHandler(c *cli.Context) error {
 	}
 
 	logrus.Debugf("listImagesResponse: %+v", resp)
-
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%s\n", data)
-	return err
+	return resp, err
 }
 
 var imagesCmd = cli.Command{

@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -15,36 +15,13 @@ package main
 
 import (
 	"fmt"
-
-	"github.com/pkg/errors"
-	"github.com/urfave/cli"
 )
 
-func mountHandler(c *cli.Context) error {
-
-	if len(c.Args()) != 1 {
-		cli.ShowCommandHelp(c, "mount")
-		return errors.New("Exactly one arguments expected")
-	}
-
-	idOrName := c.Args()[0]
-	mountPoint, err := getMountPoint(c, idOrName)
+func containerMount(gopts *globalOptions, idOrName string) error {
+	mountPoint, err := getMountPoint(gopts, idOrName)
 	if err != nil {
 		return fmt.Errorf("failed to mount container %s: %v", idOrName, err)
 	}
 	fmt.Print(mountPoint)
 	return err
-}
-
-var mountCmd = cli.Command{
-	Name:  "mount",
-	Usage: "isulad_kit mount [ID|NAME]",
-	Description: fmt.Sprintf(`
-
-	Mount a container's filesystem, and returns the location of its root filesystem.
-
-	`),
-	ArgsUsage: "[ID|NAME]",
-	Action:    mountHandler,
-	Flags:     []cli.Flag{},
 }

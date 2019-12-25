@@ -1,22 +1,30 @@
-From 98984411f69a7a051dbb916cddbe3b081ac9b3c0 Mon Sep 17 00:00:00 2001
+From bd0e2481d325ff0ee50571a1c239a18c5fd79bcb Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Tue, 18 Jun 2019 14:12:33 +0800
-Subject: [PATCH 23/31] encrypt auth config and add lock
+Subject: [PATCH 23/37] encrypt auth config and add lock
 
 Signed-off-by: WangFengTu <wangfengtu@huawei.com>
 ---
- .../containers/image/pkg/docker/aes/aes.go         | 116 +++++++++++++++++++++
- .../containers/image/pkg/docker/config/config.go   |  62 +++++++++++
- 2 files changed, 178 insertions(+)
+ .../containers/image/pkg/docker/aes/aes.go    | 124 ++++++++++++++++++
+ .../image/pkg/docker/config/config.go         |  62 +++++++++
+ 2 files changed, 186 insertions(+)
  create mode 100644 vendor/github.com/containers/image/pkg/docker/aes/aes.go
 
 diff --git a/vendor/github.com/containers/image/pkg/docker/aes/aes.go b/vendor/github.com/containers/image/pkg/docker/aes/aes.go
 new file mode 100644
-index 0000000..c4b89e1
+index 0000000..5e55501
 --- /dev/null
 +++ b/vendor/github.com/containers/image/pkg/docker/aes/aes.go
-@@ -0,0 +1,116 @@
-+// Copyright (c) Huawei Technologies Co., Ltd. 2018-2019. All rights reserved.
+@@ -0,0 +1,124 @@
++// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
++// iSulad-kit licensed under the Mulan PSL v1.
++// You can use this software according to the terms and conditions of the Mulan PSL v1.
++// You may obtain a copy of Mulan PSL v1 at:
++//     http://license.coscl.org.cn/MulanPSL
++// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
++// IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR
++// PURPOSE.
++// See the Mulan PSL v1 for more details.
 +// Description: AES Encrypt and Decrypt
 +// Author: wangfengtu
 +// Create: 2019-07-16
@@ -238,5 +246,5 @@ index 1f57625..3033f12 100644
  		if err != nil {
  			return errors.Wrapf(err, "error marshaling JSON %q", path)
 -- 
-1.8.3.1
+2.19.1
 

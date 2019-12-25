@@ -8,7 +8,7 @@ Summary:    a tool for downloading iSulad images
 
 Group:      Applications/System
 License:    Mulan PSL v1
-URL:        http://code.huawei.com/containers/iSulad-kit
+URL:        https://gitee.com/src-openeuler/iSulad-kit
 Source0:    iSulad-kit-1.0.tar.gz
 
 BuildRequires:  golang >= 1.8.3

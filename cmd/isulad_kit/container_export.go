@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -14,7 +14,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,38 +21,35 @@ import (
 	"github.com/containers/storage/pkg/archive"
 	"github.com/containers/storage/pkg/idtools"
 	"github.com/containers/storage/pkg/ioutils"
-	"github.com/urfave/cli"
 )
 
-func exportHandler(c *cli.Context) error {
-	if len(c.Args()) != 1 {
-		cli.ShowCommandHelp(c, "export")
-		return errors.New("Exactly one arguments expected")
-	}
+type exportOptions struct {
+	file        string
+	uid         int
+	gid         int
+	isSetOffset bool
+	offset      int
+}
 
-	file := c.String("output")
-	if file == "" {
-		return errors.New("Please use --output parameter to specify output file")
-	}
-
-	output, err := os.OpenFile(file, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
+func exportRootfs(gopts *globalOptions, eopts *exportOptions, idOrName string) error {
+	output, err := os.OpenFile(eopts.file, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
-		return fmt.Errorf("Error creating file %s: %v", file, err)
+		return fmt.Errorf("Error creating file %s: %v", eopts.file, err)
 	}
 	defer output.Close()
 
-	idOrName := c.Args()[0]
-	mountPoint, err := getMountPoint(c, idOrName)
+	mountPoint, err := getMountPoint(gopts, idOrName)
 	if err != nil {
 		return fmt.Errorf("failed to mount container %s: %v", idOrName, err)
 	}
+	defer putMountPoint(gopts, idOrName, false)
 
 	/* offset default to be 65535 if not set*/
-	uid := c.Int("uid")
-	gid := c.Int("gid")
+	uid := eopts.uid
+	gid := eopts.gid
 	offset := 65535
-	if c.IsSet("offset") {
-		offset = c.Int("offset")
+	if eopts.isSetOffset {
+		offset = eopts.offset
 	}
 
 	if uid < 0 || gid < 0 {
@@ -97,34 +93,4 @@ func exportHandler(c *cli.Context) error {
 	}
 
 	return nil
-}
-
-var exportCmd = cli.Command{
-	Name:  "export",
-	Usage: "isulad_kit export [OPTIONS] [ID|NAME]",
-	Description: fmt.Sprintf(`
-
-	Export a container's filesystem as a tar archive
-
-	`),
-	ArgsUsage: "[ID|NAME]",
-	Action:    exportHandler,
-	Flags: []cli.Flag{
-		cli.StringFlag{
-			Name:  "output",
-			Usage: "Write to a file",
-		},
-		cli.IntFlag{
-			Name:  "uid",
-			Usage: "Specify UID",
-		},
-		cli.IntFlag{
-			Name:  "gid",
-			Usage: "Specify GID",
-		},
-		cli.IntFlag{
-			Name:  "offset",
-			Usage: "Specify OFFSET",
-		},
-	},
 }

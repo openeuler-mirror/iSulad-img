@@ -1,0 +1,35 @@
+From b6bd368d91ef112e05384aaf492db6b9f0e29cd4 Mon Sep 17 00:00:00 2001
+From: LiuHao <liuhao27@huawei.com>
+Date: Thu, 5 Dec 2019 10:13:52 +0800
+Subject: [PATCH 36/37] log message of get mountpoint failed
+
+Signed-off-by: LiuHao <liuhao27@huawei.com>
+---
+ vendor/github.com/containers/storage/layers.go | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index 760b0b5..cf6dd10 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -1209,10 +1209,13 @@ func (r *layerStore) Get(id string) (*Layer, error) {
+ 	if layer, ok := r.lookup(id); ok {
+ 		result := copyLayer(layer)
+ 		data, err := r.driver.Metadata(layer.ID)
+-		if err == nil {
+-			if mergedDir, ok := data["MergedDir"]; ok {
+-				result.MountPoint = mergedDir
+-			}
++		if err != nil {
++			logrus.Warnf("Get driver metadata failed %v", err)
++			return result, nil
++		}
++
++		if mergedDir, ok := data["MergedDir"]; ok {
++			result.MountPoint = mergedDir
+ 		}
+ 		return result, nil
+ 	}
+-- 
+2.19.1
+

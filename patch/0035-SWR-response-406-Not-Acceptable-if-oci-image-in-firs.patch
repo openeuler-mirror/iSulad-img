@@ -1,0 +1,31 @@
+From 11f81dfadc2b40a2469ab1347e67be5c2415e8d2 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Fri, 29 Nov 2019 03:21:02 -0500
+Subject: [PATCH 35/37] SWR response "406: Not Acceptable" if oci image in
+ first
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ vendor/github.com/containers/image/manifest/manifest.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vendor/github.com/containers/image/manifest/manifest.go b/vendor/github.com/containers/image/manifest/manifest.go
+index ae1921b..6dfb796 100644
+--- a/vendor/github.com/containers/image/manifest/manifest.go
++++ b/vendor/github.com/containers/image/manifest/manifest.go
+@@ -33,11 +33,11 @@ const (
+ // DefaultRequestedManifestMIMETypes is a list of MIME types a types.ImageSource
+ // should request from the backend unless directed otherwise.
+ var DefaultRequestedManifestMIMETypes = []string{
+-	imgspecv1.MediaTypeImageManifest,
+ 	DockerV2Schema2MediaType,
+ 	DockerV2Schema1SignedMediaType,
+ 	DockerV2Schema1MediaType,
+ 	DockerV2ListMediaType,
++	imgspecv1.MediaTypeImageManifest,
+ }
+ 
+ // Manifest is an interface for parsing, modifying image manifests in isolation.
+-- 
+2.19.1
+

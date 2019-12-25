@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -18,58 +18,21 @@ import (
 	"fmt"
 
 	"github.com/containers/image/types"
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
 )
 
 type removeImageResponse struct {
 }
 
-func imageRemoveHandler(c *cli.Context) error {
-
-	if len(c.Args()) != 1 {
-		cli.ShowCommandHelp(c, "rmi")
-		return errors.New("Exactly one arguments expected")
-	}
-
-	imageName := c.Args()[0]
-	logrus.Debugf("Remove Image Request: %+v", imageName)
-
-	store, err := getStorageStore(true, c)
+func imageRemove(gopts *globalOptions, image string) error {
+	imageService, err := getImageService(gopts)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := commandTimeoutContextFromGlobalOptions(c)
-	defer cancel()
-
-	imageService, err := getImageService(ctx, c, store)
+	err = imageService.UnrefImage(&types.SystemContext{}, image)
 	if err != nil {
-		return err
-	}
-
-	images, err := imageService.ParseImageNames(imageName)
-	if err != nil {
-		if err == ErrParseImageID {
-			images = append(images, imageName)
-		} else {
-			return err
-		}
-	}
-
-	var deleted bool
-
-	for _, img := range images {
-		err = imageService.UnrefImage(&types.SystemContext{}, img)
-		if err != nil {
-			logrus.Debugf("error deleting image %s: %v", img, err)
-			continue
-		}
-		deleted = true
-		break
-	}
-	if !deleted && err != nil {
+		logrus.Debugf("error deleting image %s: %v", image, err)
 		return err
 	}
 
@@ -82,18 +45,4 @@ func imageRemoveHandler(c *cli.Context) error {
 	}
 	fmt.Printf("%s\n", data)
 	return err
-}
-
-var imageRemoveCmd = cli.Command{
-	Name:  "rmi",
-	Usage: "isulad_kit rmi [ID|NAME]",
-	Description: fmt.Sprintf(`
-
-	Remove one image.
-
-	`),
-	ArgsUsage: "[ID|NAME]",
-	Action:    imageRemoveHandler,
-	// FIXME: Do we need to namespace the GPG aspect?
-	Flags: []cli.Flag{},
 }

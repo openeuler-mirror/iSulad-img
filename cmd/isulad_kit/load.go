@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -25,103 +26,105 @@ import (
 	"github.com/urfave/cli"
 )
 
-func getTagFromArchive(input string) (string, error) {
-	/* Use package tarfile to avoid unpack tar file and avoid use /tmp,
-	so we can reduce disk usage and memory usage during load. */
-	tar, err := tarfile.NewSourceFromFile(input)
+type loadOptions struct {
+	input string
+	tag   string
+}
+
+func getLoadOptions(c *cli.Context) *loadOptions {
+	return &loadOptions{
+		input: c.String("input"),
+		tag:   c.String("tag"),
+	}
+}
+
+func allRepoTags(images []tarfile.ManifestItem) []string {
+	var repoTags []string
+	for _, image := range images {
+		if image.RepoTags != nil {
+			repoTags = append(repoTags, image.RepoTags...)
+		}
+	}
+	return repoTags
+}
+
+func getTagFromArchive(tar *tarfile.Source) ([]string, error) {
+	manifest, err := tar.LoadTarManifest()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(manifest) == 0 || len(manifest[0].RepoTags) == 0 {
+		return nil, errors.New("No tag found in archive")
+	}
+
+	return allRepoTags(manifest), nil
+}
+
+func loadImage(gopts *globalOptions, lopts *loadOptions) (string, error) {
+	policyContext, err := getPolicyContext(gopts)
+	if err != nil {
+		return "", fmt.Errorf("Error loading trust policy: %v", err)
+	}
+	defer policyContext.Destroy()
+
+	input := lopts.input
+	if input == "" {
+		return "", fmt.Errorf("Missing input parameter, use --input to specify input file")
+	}
+
+	// If tar is compressed, NewSourceFromFile will decompress it and we should use the
+	// temporary decompressed tar file as input to avoid re-decompress later.
+	tar, err := tarfile.NewSourceFromFile(input, "")
 	if err != nil {
 		return "", err
 	}
 	defer tar.Close()
 
-	manifest, err := tar.LoadTarManifest()
+	tags, err := getTagFromArchive(tar)
+	if err != nil {
+		return "", fmt.Errorf("Get tag from input file %s failed: %v", input, err)
+	}
+	tag := lopts.tag
+	if len(tags) > 1 && tag != "" {
+		return "", fmt.Errorf("Can not use --tag option because more than one image found in tar archive")
+	}
+
+	store, err := getStorageStore(gopts)
 	if err != nil {
 		return "", err
 	}
 
-	if len(manifest) == 0 || len(manifest[0].RepoTags) == 0 {
-		return "", errors.New("No tag found in archive")
-	}
-
-	/* Support load one image with one tag, other tags are ignored. */
-	return manifest[0].RepoTags[0], nil
-}
-
-func loadHandler(c *cli.Context) error {
-	var src string
-
-	if len(c.Args()) != 0 {
-		cli.ShowCommandHelp(c, "load")
-		return errors.New("Exactly zero arguments expected")
-	}
-
-	policyContext, err := getPolicyContext(c)
-	if err != nil {
-		return fmt.Errorf("Error loading trust policy: %v", err)
-	}
-	defer policyContext.Destroy()
-
-	input := c.String("input")
-	if input != "" {
-		src = "docker-archive:" + input
-	} else {
-		return fmt.Errorf("Missing input parameter, use --input to specify input file")
-	}
-
-	srcRef, err := alltransports.ParseImageName(src)
-	if err != nil {
-		return fmt.Errorf("Invalid input name %s: %v", input, err)
-	}
-
-	tag := c.String("tag")
-	if tag == "" {
-		tag, err = getTagFromArchive(input)
-		if err != nil {
-			return fmt.Errorf("Get tag from input file %s failed: %v", input, err)
+	var output string
+	for _, srcTag := range tags {
+		destTag := srcTag
+		if tag != "" {
+			destTag = tag
 		}
+
+		// Format: docker-archive:/path/image.tar:imagename:v1
+		formatedInput := "docker-archive:" + tarfile.TarPath(tar) + ":" + srcTag
+		srcRef, err := alltransports.ParseImageName(formatedInput)
+		if err != nil {
+			return output, fmt.Errorf("Invalid input name %s: %v", formatedInput, err)
+		}
+
+		destRef, err := storage.Transport.ParseStoreReference(store, destTag)
+		if err != nil {
+			return output, fmt.Errorf("Invalid tag %s: %v", destTag, err)
+		}
+
+		_, err = copy.Image(context.Background(), policyContext, destRef, srcRef, &copy.Options{
+			ReportWriter: os.Stdout,
+		})
+		if err != nil {
+			return output, fmt.Errorf("Load image %v failed: %v", srcTag, err)
+		}
+
+		loadedOneImage := fmt.Sprintf("Loaded image: %s\n", destRef.DockerReference().String())
+		fmt.Fprintf(os.Stdout, loadedOneImage)
+		output += loadedOneImage
 	}
 
-	store, err := getStorageStore(true, c)
-	if err != nil {
-		return err
-	}
-
-	destRef, err := storage.Transport.ParseStoreReference(store, tag)
-	if err != nil {
-		return fmt.Errorf("Invalid tag %s: %v", tag, err)
-	}
-
-	ctx, cancel := commandTimeoutContextFromGlobalOptions(c)
-	defer cancel()
-
-	_, err = copy.Image(ctx, policyContext, destRef, srcRef, &copy.Options{
-		ReportWriter: os.Stdout,
-	})
-
-	fmt.Fprintf(os.Stdout, "Loaded image: %s\n", destRef.DockerReference().String())
-
-	return err
-}
-
-var loadCmd = cli.Command{
-	Name:  "load",
-	Usage: "Load an image from a tar",
-	Description: fmt.Sprintf(`
-
-	Load an image from a tar
-	`),
-	ArgsUsage: "",
-	Action:    loadHandler,
-	Flags: []cli.Flag{
-		cli.StringFlag{
-			Name:  "input",
-			Value: "",
-			Usage: "Read from a tar archive file",
-		},
-		cli.StringFlag{
-			Name:  "tag",
-			Value: "",
-			Usage: "Name and optionally a tag in the 'name:tag' format",
-		},
-	},
+	return output, err
 }

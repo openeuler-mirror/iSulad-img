@@ -1,14 +1,14 @@
-From cc672999c8a55616979cd31d1e8f9264be6212d4 Mon Sep 17 00:00:00 2001
+From 0158e87083b81e183b40a7278c590c37620d853c Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Mon, 15 Apr 2019 06:43:06 -0400
-Subject: [PATCH 09/31] add support pull image from LSWR
+Subject: [PATCH 09/37] add support pull image from LSWR
 
 Signed-off-by: LiFeng <lifeng68@huawei.com>
 ---
- .../containers/image/docker/docker_client.go       | 13 +++-
- .../containers/image/oci/layout/oci_src.go         |  2 +-
- .../image/pkg/tlsclientconfig/tlsclientconfig.go   | 75 +++++++++++++++++++++-
- vendor/github.com/containers/image/types/types.go  |  3 +
+ .../containers/image/docker/docker_client.go  | 13 +++-
+ .../containers/image/oci/layout/oci_src.go    |  2 +-
+ .../pkg/tlsclientconfig/tlsclientconfig.go    | 75 ++++++++++++++++++-
+ .../containers/image/types/types.go           |  3 +
  4 files changed, 88 insertions(+), 5 deletions(-)
 
 diff --git a/vendor/github.com/containers/image/docker/docker_client.go b/vendor/github.com/containers/image/docker/docker_client.go
@@ -171,5 +171,5 @@ index 9fdab23..814218d 100644
  
  // ProgressProperties is used to pass information from the copy code to a monitor which
 -- 
-1.8.3.1
+2.19.1
 

@@ -1,0 +1,199 @@
+From 571d52d1848b632220b7ba17a28ad2ecda4a99e8 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Mon, 18 Nov 2019 21:20:52 -0500
+Subject: [PATCH 34/37] Support load multiple images
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../containers/image/docker/archive/src.go    |  6 +-
+ .../image/docker/daemon/daemon_src.go         |  2 +-
+ .../containers/image/docker/tarfile/src.go    | 60 ++++++++++++++++---
+ 3 files changed, 54 insertions(+), 14 deletions(-)
+
+diff --git a/vendor/github.com/containers/image/docker/archive/src.go b/vendor/github.com/containers/image/docker/archive/src.go
+index e46c9db..27a6420 100644
+--- a/vendor/github.com/containers/image/docker/archive/src.go
++++ b/vendor/github.com/containers/image/docker/archive/src.go
+@@ -4,7 +4,6 @@ import (
+ 	"context"
+ 	"github.com/containers/image/docker/tarfile"
+ 	"github.com/containers/image/types"
+-	"github.com/sirupsen/logrus"
+ )
+ 
+ type archiveImageSource struct {
+@@ -15,10 +14,7 @@ type archiveImageSource struct {
+ // newImageSource returns a types.ImageSource for the specified image reference.
+ // The caller must call .Close() on the returned ImageSource.
+ func newImageSource(ctx context.Context, ref archiveReference) (types.ImageSource, error) {
+-	if ref.destinationRef != nil {
+-		logrus.Warnf("docker-archive: references are not supported for sources (ignoring)")
+-	}
+-	src, err := tarfile.NewSourceFromFile(ref.path)
++	src, err := tarfile.NewSourceFromFile(ref.path, ref.destinationRef.String())
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/vendor/github.com/containers/image/docker/daemon/daemon_src.go b/vendor/github.com/containers/image/docker/daemon/daemon_src.go
+index 89e66ef..1e6c592 100644
+--- a/vendor/github.com/containers/image/docker/daemon/daemon_src.go
++++ b/vendor/github.com/containers/image/docker/daemon/daemon_src.go
+@@ -40,7 +40,7 @@ func newImageSource(ctx context.Context, sys *types.SystemContext, ref daemonRef
+ 	}
+ 	defer inputStream.Close()
+ 
+-	src, err := tarfile.NewSourceFromStream(inputStream)
++	src, err := tarfile.NewSourceFromStream(inputStream, "")
+ 	if err != nil {
+ 		return nil, err
+ 	}
+diff --git a/vendor/github.com/containers/image/docker/tarfile/src.go b/vendor/github.com/containers/image/docker/tarfile/src.go
+index 889e5f8..50c7c44 100644
+--- a/vendor/github.com/containers/image/docker/tarfile/src.go
++++ b/vendor/github.com/containers/image/docker/tarfile/src.go
+@@ -5,11 +5,13 @@ import (
+ 	"bytes"
+ 	"context"
+ 	"encoding/json"
++	"fmt"
+ 	"io"
+ 	"io/ioutil"
+ 	"os"
+ 	"path"
+ 
++	"github.com/containers/image/docker/reference"
+ 	"github.com/containers/image/internal/tmpdir"
+ 	"github.com/containers/image/manifest"
+ 	"github.com/containers/image/pkg/compression"
+@@ -20,6 +22,7 @@ import (
+ 
+ // Source is a partial implementation of types.ImageSource for reading from tarPath.
+ type Source struct {
++	repoTag              string
+ 	tarPath              string
+ 	removeTarPathOnClose bool // Remove temp file on close if true
+ 	// The following data is only available after ensureCachedDataIsPresent() succeeds
+@@ -37,13 +40,17 @@ type layerInfo struct {
+ 	size int64
+ }
+ 
++func TarPath(source *Source) string {
++	return source.tarPath
++}
++
+ // TODO: We could add support for multiple images in a single archive, so
+ //       that people could use docker-archive:opensuse.tar:opensuse:leap as
+ //       the source of an image.
+ // 	To do for both the NewSourceFromFile and NewSourceFromStream functions
+ 
+ // NewSourceFromFile returns a tarfile.Source for the specified path.
+-func NewSourceFromFile(path string) (*Source, error) {
++func NewSourceFromFile(path, repoTag string) (*Source, error) {
+ 	file, err := os.Open(path)
+ 	if err != nil {
+ 		return nil, errors.Wrapf(err, "error opening file %q", path)
+@@ -60,15 +67,16 @@ func NewSourceFromFile(path string) (*Source, error) {
+ 	if !isCompressed {
+ 		return &Source{
+ 			tarPath: path,
++			repoTag: repoTag,
+ 		}, nil
+ 	}
+-	return NewSourceFromStream(stream)
++	return NewSourceFromStream(stream, repoTag)
+ }
+ 
+ // NewSourceFromStream returns a tarfile.Source for the specified inputStream,
+ // which can be either compressed or uncompressed. The caller can close the
+ // inputStream immediately after NewSourceFromFile returns.
+-func NewSourceFromStream(inputStream io.Reader) (*Source, error) {
++func NewSourceFromStream(inputStream io.Reader, repoTag string) (*Source, error) {
+ 	// FIXME: use SystemContext here.
+ 	// Save inputStream to a temporary file
+ 	tarCopyFile, err := ioutil.TempFile(tmpdir.TemporaryDirectoryForBigFiles(), "docker-tar")
+@@ -104,6 +112,7 @@ func NewSourceFromStream(inputStream io.Reader) (*Source, error) {
+ 
+ 	return &Source{
+ 		tarPath:              tarCopyFile.Name(),
++		repoTag:              repoTag,
+ 		removeTarPathOnClose: true,
+ 	}, nil
+ }
+@@ -197,6 +206,37 @@ func (s *Source) readTarComponent(path string) ([]byte, error) {
+ 	return bytes, nil
+ }
+ 
++func sameRepo(repo1, repo2 string) (bool, error) {
++	ref1, err := reference.ParseNormalizedNamed(repo1)
++	if err != nil {
++		return false, fmt.Errorf("parsing reference %v failed: %v", repo1, err)
++	}
++	ref2, err := reference.ParseNormalizedNamed(repo2)
++	if err != nil {
++		return false, fmt.Errorf("parsing reference %v failed: %v", repo2, err)
++	}
++
++	return ref1.String() == ref2.String(), nil
++}
++
++func mainfestIndex(tarManifest []ManifestItem, repoTag string) (int, error) {
++	if repoTag == "" {
++		return 0, nil
++	}
++	for i, m := range tarManifest {
++		for _, r := range m.RepoTags {
++			isSameRepo, err := sameRepo(r, repoTag)
++			if err != nil {
++				return 0, err
++			}
++			if isSameRepo {
++				return i, nil
++			}
++		}
++	}
++	return 0, fmt.Errorf("RepoTag %v not found in tar archive\n", repoTag)
++}
++
+ // ensureCachedDataIsPresent loads data necessary for any of the public accessors.
+ func (s *Source) ensureCachedDataIsPresent() error {
+ 	if s.tarManifest != nil {
+@@ -210,27 +250,31 @@ func (s *Source) ensureCachedDataIsPresent() error {
+ 	}
+ 
+ 	// Check to make sure length is 1
+-	if len(tarManifest) != 1 {
++	if len(tarManifest) != 1 && s.repoTag == "" {
+ 		return errors.Errorf("Unexpected tar manifest.json: expected 1 item, got %d", len(tarManifest))
+ 	}
+ 
+ 	// Read and parse config.
+-	configBytes, err := s.readTarComponent(tarManifest[0].Config)
++	mIndex, err := mainfestIndex(tarManifest, s.repoTag)
++	if err != nil {
++		return err
++	}
++	configBytes, err := s.readTarComponent(tarManifest[mIndex].Config)
+ 	if err != nil {
+ 		return err
+ 	}
+ 	var parsedConfig manifest.Schema2Image // There's a lot of info there, but we only really care about layer DiffIDs.
+ 	if err := json.Unmarshal(configBytes, &parsedConfig); err != nil {
+-		return errors.Wrapf(err, "Error decoding tar config %s", tarManifest[0].Config)
++		return errors.Wrapf(err, "Error decoding tar config %s", tarManifest[mIndex].Config)
+ 	}
+ 
+-	knownLayers, err := s.prepareLayerData(&tarManifest[0], &parsedConfig)
++	knownLayers, err := s.prepareLayerData(&tarManifest[mIndex], &parsedConfig)
+ 	if err != nil {
+ 		return err
+ 	}
+ 
+ 	// Success; commit.
+-	s.tarManifest = &tarManifest[0]
++	s.tarManifest = &tarManifest[mIndex]
+ 	s.configBytes = configBytes
+ 	s.configDigest = digest.FromBytes(configBytes)
+ 	s.orderedDiffIDList = parsedConfig.RootFS.DiffIDs
+-- 
+2.19.1
+

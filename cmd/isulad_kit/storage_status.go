@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -13,53 +13,16 @@
 
 package main
 
-import (
-	"fmt"
-
-	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
-)
-
-func storageStatusHandler(c *cli.Context) error {
-	if len(c.Args()) > 0 {
-		cli.ShowCommandHelp(c, "driver_status")
-		return errors.New("No arguments expected")
-	}
-
-	logrus.Debugf("Driver Status Requested")
-
-	store, err := getStorageStore(false, c)
+func storageStatus(gopts *globalOptions) ([][2]string, error) {
+	store, err := getStorageStore(gopts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	driver, err := store.GraphDriver()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	status := driver.Status()
-	if err != nil {
-		return err
-	}
-
-	for _, value := range status {
-		fmt.Printf("%s: %s\n", value[0], value[1])
-	}
-
-	return err
-}
-
-var storageStatusCmd = cli.Command{
-	Name:  "storage_status",
-	Usage: "isulad_kit storage_status",
-	Description: fmt.Sprintf(`
-
-	Display detailed information of the image storage driver.
-
-	`),
-	ArgsUsage: " ",
-	Action:    storageStatusHandler,
-	Flags:     []cli.Flag{},
+	return driver.Status(), err
 }

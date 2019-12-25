@@ -1,12 +1,12 @@
-From 79ce51ab65e0f7d5ceebe374ff27c10a9a3d8516 Mon Sep 17 00:00:00 2001
+From 18c535402178aac24348f7b681e407fd1b5a745d Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Fri, 9 Aug 2019 04:56:23 -0400
-Subject: [PATCH 29/31] ignore ENOENT if direcotry has been removed when find
+Subject: [PATCH 29/37] ignore ENOENT if direcotry has been removed when find
  next project id
 
 Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
 ---
- vendor/github.com/containers/storage/drivers/quota/projectquota.go | 3 ++-
+ .../containers/storage/drivers/quota/projectquota.go           | 3 ++-
  1 file changed, 2 insertions(+), 1 deletion(-)
 
 diff --git a/vendor/github.com/containers/storage/drivers/quota/projectquota.go b/vendor/github.com/containers/storage/drivers/quota/projectquota.go
@@ -31,5 +31,5 @@ index c90c46f..66007cf 100644
  		}
  		if projid > 0 {
 -- 
-1.8.3.1
+2.19.1
 

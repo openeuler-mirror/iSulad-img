@@ -43,16 +43,27 @@ all: isulad_kit
 isulad_kit: link
 	echo $(GOPATH)
 	echo $(CURDIR)
+	rm -rf $(CURDIR)/src/isula-image/isula
+	mkdir -p $(CURDIR)/src/isula-image/
+	cp -rf isula $(CURDIR)/src/isula-image/
 	mkdir -p ${GOTMPDIR}
-	$(GPGME_ENV) go build ${GO_DYN_FLAGS} -ldflags "-tmpdir ${GOTMPDIR} -X main.gitCommit=${GIT_COMMIT}" -gcflags "$(GOGCFLAGS)" -tags "$(BUILDTAGS)" -o isulad_kit ./cmd/isulad_kit
+	$(GPGME_ENV) go build ${GO_DYN_FLAGS} -ldflags "-extldflags -zrelro -extldflags -znow -tmpdir ${GOTMPDIR} -X main.gitCommit=${GIT_COMMIT}" -gcflags "$(GOGCFLAGS)" -tags "$(BUILDTAGS)" -o isulad_kit ./cmd/isulad_kit
 	rm -rf ${GOTMPDIR}
+	rm -rf $(CURDIR)/src/isula-image/isula
 
 static: link
 	echo $(GOPATH)
 	echo $(CURDIR)
+	rm -rf $(CURDIR)/src/isula-image/isula
+	mkdir -p $(CURDIR)/src/isula-image/
+	cp -rf isula $(CURDIR)/src/isula-image/
 	mkdir -p ${GOTMPDIR}
 	$(GPGME_ENV) go build -ldflags "-tmpdir ${GOTMPDIR} -extldflags \"-static\" -X main.gitCommit=${GIT_COMMIT}" -gcflags "$(GOGCFLAGS)" -tags "$(BUILDTAGS)" -o isulad_kit ./cmd/isulad_kit
 	rm -rf ${GOTMPDIR}
+	rm -rf $(CURDIR)/src/isula-image/isula
+
+proto:
+	protoc --go_out=plugins=grpc:. ./isula/isula_image.proto
 
 clean:
 	rm -rf ${ISULAD_KIT_BIN}

@@ -1,15 +1,15 @@
-From 220be4fc34163505bf076309484e16db87b15fd2 Mon Sep 17 00:00:00 2001
+From 429ea92090cea1951fb19081feebf62f48b16400 Mon Sep 17 00:00:00 2001
 From: LiuHao <liuhao27@huawei.com>
 Date: Fri, 9 Aug 2019 17:07:33 +0800
-Subject: [PATCH 30/31] fixbug: cause by remove container.json in run dir
+Subject: [PATCH 30/37] fixbug: cause by remove container.json in run dir
 
 Start container will load container.json in run dir.
 If it is not exist, start container will failed.
 
 Signed-off-by: LiuHao <liuhao27@huawei.com>
 ---
- vendor/github.com/containers/storage/containers.go | 26 ++++++++++-
- vendor/github.com/containers/storage/store.go      | 54 ++++++++++++++++------
+ .../containers/storage/containers.go          | 26 ++++++++-
+ vendor/github.com/containers/storage/store.go | 54 ++++++++++++++-----
  2 files changed, 65 insertions(+), 15 deletions(-)
 
 diff --git a/vendor/github.com/containers/storage/containers.go b/vendor/github.com/containers/storage/containers.go
@@ -211,5 +211,5 @@ index da36720..522920c 100644
  	metadata := RuntimeContainerMetadata{}
  	if err = json.Unmarshal([]byte(container.Metadata), &metadata); err != nil {
 -- 
-1.8.3.1
+2.19.1
 

@@ -1,11 +1,11 @@
-From 9d71bccf259ec4df3dfac29f1af2d5a01012d5b1 Mon Sep 17 00:00:00 2001
+From 7bfd69f462e50c5a3bfb8bead8e09bf1bd6fb8b9 Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Thu, 4 Jul 2019 16:19:56 +0800
-Subject: [PATCH 24/31] Change perm and add max file size check
+Subject: [PATCH 24/37] Change perm and add max file size check
 
 Signed-off-by: WangFengTu <wangfengtu@huawei.com>
 ---
- .../containers/image/pkg/docker/config/config.go    | 21 ++++++++++++++++++++-
+ .../image/pkg/docker/config/config.go         | 21 ++++++++++++++++++-
  1 file changed, 20 insertions(+), 1 deletion(-)
 
 diff --git a/vendor/github.com/containers/image/pkg/docker/config/config.go b/vendor/github.com/containers/image/pkg/docker/config/config.go
@@ -55,5 +55,5 @@ index 3033f12..1e84086 100644
  		}
  	}
 -- 
-1.8.3.1
+2.19.1
 

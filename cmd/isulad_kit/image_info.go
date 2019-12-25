@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -17,6 +17,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
@@ -31,22 +33,42 @@ func infoHandler(c *cli.Context) error {
 	image := c.Args()[0]
 	logrus.Debugf("Info Image Request: %+v", image)
 
-	store, err := getStorageStore(true, c)
+	gopts, err := getGlobalOptions(c)
 	if err != nil {
 		return err
+	}
+
+	var data string
+	sockAddr, err := isDaemonInstanceExist(defaultInfoFile)
+	if strings.Contains(err.Error(), daemonInstanceExist) {
+		data, err = grpcCliInfo(sockAddr, image)
+	} else if os.IsNotExist(err) {
+		data, err = imageInfo(gopts, image)
+	}
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("%s\n", data)
+	return err
+}
+
+func imageInfo(gopts *globalOptions, image string) (string, error) {
+	store, err := getStorageStore(gopts)
+	if err != nil {
+		return "", err
 	}
 
 	imageConfig, err := getImageConf(store, image)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	data, err := json.Marshal(imageConfig)
 	if err != nil {
-		return err
+		return "", err
 	}
-	fmt.Printf("%s\n", data)
-	return nil
+	return string(data), nil
 }
 
 var infoCmd = cli.Command{

@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -14,14 +14,10 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
 	"path"
 	"time"
 
 	"github.com/containers/storage"
-	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
 )
 
 // FilesystemIdentifier uniquely identify the filesystem.
@@ -78,42 +74,16 @@ func getStorageFsInfo(store storage.Store) (*FilesystemUsage, error) {
 	return &usage, nil
 }
 
-func imageFsinfoHandler(c *cli.Context) error {
-	store, err := getStorageStore(true, c)
+func imageFsinfo(gopts *globalOptions) ([]*FilesystemUsage, error) {
+	store, err := getStorageStore(gopts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	fsUsage, err := getStorageFsInfo(store)
-
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	resp := &ImageFsInfoResponse{
-		ImageFilesystems: []*FilesystemUsage{fsUsage},
-	}
-
-	logrus.Debugf("ImagesFsinfoResponse: %+v", resp)
-
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%s\n", data)
-	return err
-}
-
-var imageFsinfoCmd = cli.Command{
-	Name:  "fsinfo",
-	Usage: "isulad_kit fsinfo",
-	Description: fmt.Sprintf(`
-
-	Display information of the filesystem that is used to store images.
-
-	`),
-	ArgsUsage: " ",
-	Action:    imageFsinfoHandler,
-	// FIXME: Do we need to namespace the GPG aspect?
-	Flags: []cli.Flag{},
+	return []*FilesystemUsage{fsUsage}, err
 }

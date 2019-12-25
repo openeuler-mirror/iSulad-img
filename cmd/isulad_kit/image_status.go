@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -14,8 +14,6 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/containers/image/types"
@@ -23,7 +21,6 @@ import (
 	"github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
 )
 
 // Int64Value is the wrapper of int64.
@@ -69,111 +66,56 @@ type imageStatusResponse struct {
 	Info map[string]string
 }
 
-func imageStatusHandler(c *cli.Context) error {
-
-	if len(c.Args()) != 1 {
-		cli.ShowCommandHelp(c, "status")
-		return errors.New("Exactly one arguments expected")
-	}
-
-	imageName := c.Args()[0]
-	logrus.Debugf("Status Image Request: %+v", imageName)
-
-	store, err := getStorageStore(true, c)
+func imageStatus(gopts *globalOptions, image string) (*imageStatusResponse, error) {
+	imageService, err := getImageService(gopts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	ctx, cancel := commandTimeoutContextFromGlobalOptions(c)
-	defer cancel()
-
-	imageService, err := getImageService(ctx, c, store)
+	store, err := getStorageStore(gopts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	images, err := imageService.ParseImageNames(imageName)
-	if err != nil {
-		if err == ErrParseImageID {
-			images = append(images, imageName)
-		} else {
-			return err
-		}
-	}
-
-	var (
-		notfound bool
-		lastErr  error
-	)
 	resp := &imageStatusResponse{}
-	for _, image := range images {
-		status, err := imageService.GetOneImage(&types.SystemContext{}, image)
-		if err != nil {
-			if errors.Cause(err) == storage.ErrImageUnknown {
-				logrus.Warnf("imageStatus: can't find %s", image)
-				notfound = true
-				continue
-			}
-			logrus.Warnf("imageStatus: error getting status from %s: %v", image, err)
-			lastErr = err
-			continue
+	status, err := imageService.GetOneImage(&types.SystemContext{}, image)
+	if err != nil {
+		if errors.Cause(err) == storage.ErrImageUnknown {
+			logrus.Warnf("imageStatus: can't find %s", image)
+			return resp, nil
 		}
-		created := *status.Created
-		loaded := *status.Loaded
-		imageConfig, err := getImageConf(store, image)
-		if err != nil {
-			return err
-		}
-		healthcheck, err := getHealthcheck(store, image)
-		if err != nil {
-			return err
-		}
-		resp = &imageStatusResponse{
-			Image: &Image{
-				ID:          status.ID,
-				RepoTags:    status.RepoTags,
-				RepoDigests: status.RepoDigests,
-				Size:        *status.Size,
-				Created:     &created,
-				Loaded:      &loaded,
-				ImageSpec:   imageConfig,
-				Healthcheck: healthcheck,
-			},
-		}
-		uid, username := getUserFromImage(status.User)
-		if uid != nil {
-			resp.Image.UID = &Int64Value{Value: *uid}
-		}
-		resp.Image.Username = username
-		break
+		logrus.Warnf("imageStatus: error getting status from %s: %v", image, err)
+		return nil, err
 	}
-	if lastErr != nil && resp == nil {
-		return lastErr
+	created := *status.Created
+	loaded := *status.Loaded
+	imageConfig, err := getImageConf(store, image)
+	if err != nil {
+		return nil, err
 	}
-	if notfound && resp == nil {
-		resp = &imageStatusResponse{}
+	healthcheck, err := getHealthcheck(store, image)
+	if err != nil {
+		return nil, err
 	}
+	resp = &imageStatusResponse{
+		Image: &Image{
+			ID:          status.ID,
+			RepoTags:    status.RepoTags,
+			RepoDigests: status.RepoDigests,
+			Size:        *status.Size,
+			Created:     &created,
+			Loaded:      &loaded,
+			ImageSpec:   imageConfig,
+			Healthcheck: healthcheck,
+		},
+	}
+	uid, username := getUserFromImage(status.User)
+	if uid != nil {
+		resp.Image.UID = &Int64Value{Value: *uid}
+	}
+	resp.Image.Username = username
 
 	logrus.Debugf("StatusImagesResponse: %+v", resp)
 
-	data, err := json.Marshal(resp)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%s\n", data)
-	return err
-}
-
-var imageStatusCmd = cli.Command{
-	Name:  "status",
-	Usage: "isulad_kit status [ID|NAME]",
-	Description: fmt.Sprintf(`
-
-	Display detailed information of the image.
-
-	`),
-	ArgsUsage: "[ID|NAME]",
-	Action:    imageStatusHandler,
-	// FIXME: Do we need to namespace the GPG aspect?
-	Flags: []cli.Flag{},
+	return resp, nil
 }

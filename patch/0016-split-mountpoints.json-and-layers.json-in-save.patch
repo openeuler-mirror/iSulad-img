@@ -1,11 +1,11 @@
-From 2824ce8449eefb65a1a08dcfe6964ce95ed58033 Mon Sep 17 00:00:00 2001
+From ec5e3c77801c9cbae97ae6a52d1fc0068678cc4a Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Mon, 13 May 2019 04:58:15 -0400
-Subject: [PATCH 16/31] split mountpoints.json and layers.json in save
+Subject: [PATCH 16/37] split mountpoints.json and layers.json in save
 
 Signed-off-by: LiFeng <lifeng68@huawei.com>
 ---
- vendor/github.com/containers/storage/layers.go | 46 ++++++++++++++++++++++----
+ .../github.com/containers/storage/layers.go   | 46 ++++++++++++++++---
  1 file changed, 39 insertions(+), 7 deletions(-)
 
 diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
@@ -102,5 +102,5 @@ index b805e9a..9022e6e 100644
  }
  
 -- 
-1.8.3.1
+2.19.1
 

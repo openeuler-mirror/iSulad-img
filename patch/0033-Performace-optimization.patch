@@ -1,0 +1,1560 @@
+From 6fab278a260666e6f3777498dcc41ff176ef8cbd Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Tue, 26 Nov 2019 22:06:55 -0500
+Subject: [PATCH 33/37] Performace optimization
+
+1.Seprate big json file to small json files.
+2.Migation json files for above change.
+3.Reduce lock time when prepare container.
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../containers/storage/containers.go          | 209 ++++++++++--
+ .../storage/drivers/quota/projectquota.go     |   3 +-
+ .../github.com/containers/storage/images.go   | 260 +++++++++++---
+ .../github.com/containers/storage/layers.go   | 323 +++++++++++++++---
+ vendor/github.com/containers/storage/store.go |  95 +++---
+ 5 files changed, 734 insertions(+), 156 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/containers.go b/vendor/github.com/containers/storage/containers.go
+index 72bd0cb..0c80078 100644
+--- a/vendor/github.com/containers/storage/containers.go
++++ b/vendor/github.com/containers/storage/containers.go
+@@ -15,8 +15,11 @@ import (
+ 	"github.com/containers/storage/pkg/truncindex"
+ 	digest "github.com/opencontainers/go-digest"
+ 	"github.com/pkg/errors"
++	"github.com/sirupsen/logrus"
+ )
+ 
++const containerNameLen = 64
++
+ // A Container is a reference to a read-write layer with metadata.
+ type Container struct {
+ 	// ID is either one which was specified at create-time, or a random
+@@ -36,6 +39,9 @@ type Container struct {
+ 	// read-write layer.
+ 	LayerID string `json:"layer"`
+ 
++	// RWLayer mountpoint path
++	MountPoint string `json:"-"`
++
+ 	// Metadata is data we keep for the convenience of the caller.  It is not
+ 	// expected to be large, since it is kept in memory.
+ 	Metadata string `json:"metadata,omitempty"`
+@@ -116,6 +122,10 @@ type containerStore struct {
+ 	byid       map[string]*Container
+ 	bylayer    map[string]*Container
+ 	byname     map[string]*Container
++
++	// flag for daemon
++	daemon bool
++	loaded bool
+ }
+ 
+ func copyContainer(c *Container) *Container {
+@@ -168,6 +178,10 @@ func (r *containerStore) containerspath() string {
+ 	return filepath.Join(r.dir, "containers.json")
+ }
+ 
++func (r *containerStore) containerPath(id string) string {
++	return filepath.Join(r.datadir(id), "container.json")
++}
++
+ func (r *containerStore) datadir(id string) string {
+ 	return filepath.Join(r.dir, id)
+ }
+@@ -176,38 +190,155 @@ func (r *containerStore) datapath(id, key string) string {
+ 	return filepath.Join(r.datadir(id), makeBigDataBaseName(key))
+ }
+ 
+-func (r *containerStore) loadHelper() (error, bool) {
+-	needSave := false
++func (r *containerStore) containersFromSingleJson() ([]*Container, error) {
++	containers := []*Container{}
++
+ 	rpath := r.containerspath()
+ 	data, err := ioutil.ReadFile(rpath)
+ 	if err != nil && !os.IsNotExist(err) {
+-		return err, needSave
++		return containers, err
++	}
++
++	if err = json.Unmarshal(data, &containers); len(data) == 0 || err == nil {
++		return containers, nil
+ 	}
++
++	return containers, err
++}
++
++func (r *containerStore) migration() error {
+ 	containers := []*Container{}
++
++	_, err := os.Stat(r.containerspath())
++	if err != nil && !os.IsNotExist(err) {
++		return err
++	} else if os.IsNotExist(err) {
++		return nil
++	}
++
++	containers, err = r.containersFromSingleJson()
++	if err != nil {
++		return err
++	}
++
++	for _, container := range containers {
++		data, err := json.Marshal(container)
++		if err != nil {
++			logrus.Errorf("Marshal container error: %v", err)
++			return err
++		}
++
++		err = os.MkdirAll(r.datadir(container.ID), 0700)
++		if err != nil {
++			logrus.Errorf("Create directory %s error: %v", r.datadir(container.ID), err)
++			return err
++		}
++
++		err = ioutils.AtomicWriteFile(r.containerPath(container.ID), data, 0600)
++		if err != nil {
++			logrus.Errorf("Write data to file %s error: %v", r.containerPath(container.ID), err)
++			return err
++		}
++	}
++
++	return nil
++}
++
++func (r *containerStore) getContainersFromJson() ([]*Container, error) {
++	if r.daemon {
++		containers := []*Container{}
++
++		if err := r.migration(); err != nil {
++			return nil, err
++		}
++
++		// If error occured when walking directory, skip it to avoid start failure
++		err := filepath.Walk(r.dir, func(path string, info os.FileInfo, err error) error {
++			if err != nil {
++				logrus.Errorf("Walk containers directory error: %v", err)
++				return nil
++			}
++
++			// Container's json is placed inside container's data directory, so skip any other file or directory
++			if !info.IsDir() || info.Name() == filepath.Base(r.dir) || len(info.Name()) != containerNameLen {
++				return nil
++			}
++
++			rpath := r.containerPath(info.Name())
++			data, err := ioutil.ReadFile(rpath)
++			if err != nil {
++				logrus.Errorf("Found container %v but load json failed: %v", info.Name(), err)
++				return nil
++			}
++
++			container := &Container{}
++			if err = json.Unmarshal(data, container); err != nil {
++				logrus.Errorf("Unmarshal json %v failed: %v", rpath, err)
++				return nil
++			}
++
++			containers = append(containers, container)
++
++			return nil
++		})
++		if err != nil {
++			return containers, err
++		}
++
++		if err := os.Remove(r.containerspath()); err != nil && !os.IsNotExist(err) {
++			return containers, err
++		}
++
++		return containers, nil
++	} else {
++		return r.containersFromSingleJson()
++	}
++}
++
++func (r *containerStore) loadHelper() (error, bool) {
++	needSave := false
++
++	// Do not need reload if daemon
++	if r.loaded && r.daemon {
++		return nil, false
++	}
++
++	containers, err := r.getContainersFromJson()
++	if err != nil {
++		return err, false
++	}
++
+ 	layers := make(map[string]*Container)
+ 	idlist := []string{}
+ 	ids := make(map[string]*Container)
+ 	names := make(map[string]*Container)
+-	if err = json.Unmarshal(data, &containers); len(data) == 0 || err == nil {
+-		idlist = make([]string, 0, len(containers))
+-		for n, container := range containers {
+-			idlist = append(idlist, container.ID)
+-			ids[container.ID] = containers[n]
+-			layers[container.LayerID] = containers[n]
+-			for _, name := range container.Names {
+-				if conflict, ok := names[name]; ok {
+-					r.removeName(conflict, name)
+-					needSave = true
+-				}
+-				names[name] = containers[n]
++
++	idlist = make([]string, 0, len(containers))
++	for n, container := range containers {
++		idlist = append(idlist, container.ID)
++		ids[container.ID] = containers[n]
++		layers[container.LayerID] = containers[n]
++		for _, name := range container.Names {
++			if conflict, ok := names[name]; ok {
++				r.removeName(conflict, name)
++				needSave = true
+ 			}
++			names[name] = containers[n]
++		}
++		if r.daemon && needSave {
++			r.SaveContainer(container)
++			needSave = false
+ 		}
+ 	}
++
+ 	r.containers = containers
+ 	r.idindex = truncindex.NewTruncIndex(idlist)
+ 	r.byid = ids
+ 	r.bylayer = layers
+ 	r.byname = names
++
++	r.loaded = true
++
+ 	return nil, needSave
+ }
+ 
+@@ -243,6 +374,21 @@ func (r *containerStore) Save() error {
+ 	return ioutils.AtomicWriteFile(rpath, jdata, 0600)
+ }
+ 
++func (r *containerStore) SaveContainer(container *Container) error {
++	if !r.Locked() {
++		return errors.New("container store is not locked")
++	}
++	rpath := r.containerPath(container.ID)
++	if err := os.MkdirAll(filepath.Dir(rpath), 0700); err != nil {
++		return err
++	}
++	jdata, err := json.Marshal(container)
++	if err != nil {
++		return err
++	}
++	return ioutils.AtomicWriteFile(rpath, jdata, 0600)
++}
++
+ func newContainerStoreWithoutData(dir string) (ContainerStore, error) {
+ 	var err error
+ 	var lockfile filelocker.Locker
+@@ -267,7 +413,7 @@ func newContainerStoreWithoutData(dir string) (ContainerStore, error) {
+ 	return &cstore, nil
+ }
+ 
+-func newContainerStore(readonly bool, dir string) (ContainerStore, error) {
++func newContainerStore(daemon bool, readonly bool, dir string) (ContainerStore, error) {
+ 	var err error
+ 	var lockfile, rolockfile filelocker.Locker
+ 	if !readonly {
+@@ -296,6 +442,7 @@ func newContainerStore(readonly bool, dir string) (ContainerStore, error) {
+ 		byid:       make(map[string]*Container),
+ 		bylayer:    make(map[string]*Container),
+ 		byname:     make(map[string]*Container),
++		daemon:     daemon,
+ 	}
+ 	if readonly {
+ 		err = cstore.ROLoad()
+@@ -338,6 +485,9 @@ func (r *containerStore) ClearFlag(id string, flag string) error {
+ 		return ErrContainerUnknown
+ 	}
+ 	delete(container.Flags, flag)
++	if r.daemon {
++		return r.SaveContainer(container)
++	}
+ 	return r.Save()
+ }
+ 
+@@ -350,6 +500,9 @@ func (r *containerStore) SetFlag(id string, flag string, value interface{}) erro
+ 		container.Flags = make(map[string]interface{})
+ 	}
+ 	container.Flags[flag] = value
++	if r.daemon {
++		return r.SaveContainer(container)
++	}
+ 	return r.Save()
+ }
+ 
+@@ -397,7 +550,11 @@ func (r *containerStore) Create(id string, names []string, image, layer, metadat
+ 		for _, name := range names {
+ 			r.byname[name] = container
+ 		}
+-		err = r.Save()
++		if r.daemon {
++			err = r.SaveContainer(container)
++		} else {
++			err = r.Save()
++		}
+ 		container = copyContainer(container)
+ 	}
+ 	return container, err
+@@ -413,6 +570,9 @@ func (r *containerStore) Metadata(id string) (string, error) {
+ func (r *containerStore) SetMetadata(id, metadata string) error {
+ 	if container, ok := r.lookup(id); ok {
+ 		container.Metadata = metadata
++		if r.daemon {
++			return r.SaveContainer(container)
++		}
+ 		return r.Save()
+ 	}
+ 	return ErrContainerUnknown
+@@ -435,6 +595,9 @@ func (r *containerStore) SetNames(id string, names []string) error {
+ 			r.byname[name] = container
+ 		}
+ 		container.Names = names
++		if r.daemon {
++			return r.SaveContainer(container)
++		}
+ 		return r.Save()
+ 	}
+ 	return ErrContainerUnknown
+@@ -467,8 +630,10 @@ func (r *containerStore) Delete(id string) error {
+ 			r.containers = append(r.containers[:toDeleteIndex], r.containers[toDeleteIndex+1:]...)
+ 		}
+ 	}
+-	if err := r.Save(); err != nil {
+-		return err
++	if !r.daemon {
++		if err := r.Save(); err != nil {
++			return err
++		}
+ 	}
+ 	if err := os.RemoveAll(r.datadir(id)); err != nil {
+ 		return err
+@@ -610,7 +775,11 @@ func (r *containerStore) SetBigData(id, key string, data []byte) error {
+ 			save = true
+ 		}
+ 		if save {
+-			err = r.Save()
++			if r.daemon {
++				err = r.SaveContainer(c)
++			} else {
++				err = r.Save()
++			}
+ 		}
+ 	}
+ 	return err
+diff --git a/vendor/github.com/containers/storage/drivers/quota/projectquota.go b/vendor/github.com/containers/storage/drivers/quota/projectquota.go
+index 66007cf..c90c46f 100644
+--- a/vendor/github.com/containers/storage/drivers/quota/projectquota.go
++++ b/vendor/github.com/containers/storage/drivers/quota/projectquota.go
+@@ -76,7 +76,6 @@ import (
+ 	"io/ioutil"
+ 	"path"
+ 	"path/filepath"
+-	"strings"
+ 	"sync"
+ 	"unsafe"
+ 
+@@ -427,7 +426,7 @@ func (q *Control) findNextProjectID(home string) error {
+ 		}
+ 		path := filepath.Join(home, file.Name())
+ 		projid, err := getProjectID(path)
+-		if err != nil && !strings.Contains(err.Error(), "no such file or directory") {
++		if err != nil {
+ 			return err
+ 		}
+ 		if projid > 0 {
+diff --git a/vendor/github.com/containers/storage/images.go b/vendor/github.com/containers/storage/images.go
+index 8cb1a5a..0a5a953 100644
+--- a/vendor/github.com/containers/storage/images.go
++++ b/vendor/github.com/containers/storage/images.go
+@@ -7,12 +7,13 @@ import (
+ 	"path/filepath"
+ 	"time"
+ 
++	"github.com/containers/storage/pkg/filelocker"
+ 	"github.com/containers/storage/pkg/ioutils"
+ 	"github.com/containers/storage/pkg/stringid"
+ 	"github.com/containers/storage/pkg/truncindex"
+-	"github.com/containers/storage/pkg/filelocker"
+ 	digest "github.com/opencontainers/go-digest"
+ 	"github.com/pkg/errors"
++	"github.com/sirupsen/logrus"
+ )
+ 
+ const (
+@@ -20,6 +21,7 @@ const (
+ 	// contents we consider useful for computing a "digest" of the
+ 	// image, by which we can locate the image later.
+ 	ImageDigestBigDataKey = "manifest"
++	imageNameLen          = 64
+ )
+ 
+ // An Image is a reference to a layer and an associated metadata string.
+@@ -125,8 +127,8 @@ type ImageStore interface {
+ 	// Wipe removes records of all images.
+ 	Wipe() error
+ 
+-    // isulad: SetLoadedTime set the image pulled time
+-    SetLoadedTime(id string, loaded time.Time) error
++	// isulad: SetLoadedTime set the image pulled time
++	SetLoadedTime(id string, loaded time.Time) error
+ 
+ 	// AddName add the name for an image
+ 	// Duplicate names are removed from the list automatically.
+@@ -142,6 +144,10 @@ type imageStore struct {
+ 	byid       map[string]*Image
+ 	byname     map[string]*Image
+ 	bydigest   map[digest.Digest][]*Image
++
++	// flag for daemon
++	daemon bool
++	loaded bool
+ }
+ 
+ func copyImage(i *Image) *Image {
+@@ -156,7 +162,7 @@ func copyImage(i *Image) *Image {
+ 		BigDataSizes:    copyStringInt64Map(i.BigDataSizes),
+ 		BigDataDigests:  copyStringDigestMap(i.BigDataDigests),
+ 		Created:         i.Created,
+-		Loaded:			 i.Loaded,
++		Loaded:          i.Loaded,
+ 		Flags:           copyStringInterfaceMap(i.Flags),
+ 	}
+ }
+@@ -173,6 +179,10 @@ func (r *imageStore) imagespath() string {
+ 	return filepath.Join(r.dir, "images.json")
+ }
+ 
++func (r *imageStore) imagePath(id string) string {
++	return filepath.Join(r.datadir(id), "images.json")
++}
++
+ func (r *imageStore) datadir(id string) string {
+ 	return filepath.Join(r.dir, id)
+ }
+@@ -181,47 +191,164 @@ func (r *imageStore) datapath(id, key string) string {
+ 	return filepath.Join(r.datadir(id), makeBigDataBaseName(key))
+ }
+ 
+-func (r *imageStore) loadHelper() (bool, error) {
+-	shouldSave := false
++func (r *imageStore) imagesFromSingleJson() ([]*Image, error) {
++	images := []*Image{}
++
+ 	rpath := r.imagespath()
+ 	data, err := ioutil.ReadFile(rpath)
+ 	if err != nil && !os.IsNotExist(err) {
+-		return shouldSave, err
++		return images, err
++	}
++
++	if err = json.Unmarshal(data, &images); len(data) == 0 || err == nil {
++		return images, nil
+ 	}
++
++	return images, err
++}
++
++func (r *imageStore) migration() error {
+ 	images := []*Image{}
++
++	_, err := os.Stat(r.imagespath())
++	if err != nil && !os.IsNotExist(err) {
++		return err
++	} else if os.IsNotExist(err) {
++		return nil
++	}
++
++	images, err = r.imagesFromSingleJson()
++	if err != nil {
++		return err
++	}
++
++	for _, image := range images {
++		data, err := json.Marshal(image)
++		if err != nil {
++			logrus.Errorf("Marshal image error: %v", err)
++			return err
++		}
++
++		err = os.MkdirAll(r.datadir(image.ID), 0700)
++		if err != nil {
++			logrus.Errorf("Create directory %s error: %v", r.datadir(image.ID), err)
++			return err
++		}
++
++		err = ioutils.AtomicWriteFile(r.imagePath(image.ID), data, 0600)
++		if err != nil {
++			logrus.Errorf("Write data to file %s error: %v", r.imagePath(image.ID), err)
++			return err
++		}
++	}
++
++	return nil
++}
++
++func (r *imageStore) getImagesFromJson() ([]*Image, error) {
++	if r.daemon {
++		images := []*Image{}
++
++		if err := r.migration(); err != nil {
++			return nil, err
++		}
++
++		// If error occured when walking directory, skip it to avoid start failure
++		err := filepath.Walk(r.dir, func(path string, info os.FileInfo, err error) error {
++			if err != nil {
++				logrus.Errorf("Walk images directory error: %v", err)
++				return nil
++			}
++
++			// Image's json is placed inside image's data directory, so skip any other file or directory
++			if !info.IsDir() || info.Name() == filepath.Base(r.dir) || len(info.Name()) != imageNameLen {
++				return nil
++			}
++
++			rpath := r.imagePath(info.Name())
++			data, err := ioutil.ReadFile(rpath)
++			if err != nil {
++				logrus.Errorf("Found image %v but load json failed: %v", info.Name(), err)
++				return nil
++			}
++
++			image := &Image{}
++			if err = json.Unmarshal(data, image); err != nil {
++				logrus.Errorf("Unmarshal json %v failed: %v", rpath, err)
++				return nil
++			}
++
++			images = append(images, image)
++
++			return nil
++		})
++		if err != nil {
++			return images, err
++		}
++
++		if err := os.Remove(r.imagespath()); err != nil && !os.IsNotExist(err) {
++			return images, err
++		}
++
++		return images, nil
++	} else {
++		return r.imagesFromSingleJson()
++	}
++}
++
++func (r *imageStore) loadHelper() (bool, error) {
++	shouldSave := false
++
++	// Do not need reload if daemon
++	if r.loaded && r.daemon {
++		return false, nil
++	}
++
++	images, err := r.getImagesFromJson()
++	if err != nil {
++		return false, err
++	}
++
+ 	idlist := []string{}
+ 	ids := make(map[string]*Image)
+ 	names := make(map[string]*Image)
+ 	digests := make(map[digest.Digest][]*Image)
+-	if err = json.Unmarshal(data, &images); len(data) == 0 || err == nil {
+-		idlist = make([]string, 0, len(images))
+-		for n, image := range images {
+-			ids[image.ID] = images[n]
+-			idlist = append(idlist, image.ID)
+-			for _, name := range image.Names {
+-				if conflict, ok := names[name]; ok {
+-					r.removeName(conflict, name)
+-					shouldSave = true
+-				}
+-				names[name] = images[n]
+-			}
+-			// Implicit digest
+-			if digest, ok := image.BigDataDigests[ImageDigestBigDataKey]; ok {
+-				digests[digest] = append(digests[digest], images[n])
+-			}
+-			// Explicit digest
+-			if image.Digest == "" {
+-				image.Digest = image.BigDataDigests[ImageDigestBigDataKey]
+-			} else if image.Digest != image.BigDataDigests[ImageDigestBigDataKey] {
+-				digests[image.Digest] = append(digests[image.Digest], images[n])
++
++	idlist = make([]string, 0, len(images))
++	for n, image := range images {
++		ids[image.ID] = images[n]
++		idlist = append(idlist, image.ID)
++		for _, name := range image.Names {
++			if conflict, ok := names[name]; ok {
++				r.removeName(conflict, name)
++				shouldSave = true
+ 			}
++			names[name] = images[n]
++		}
++		if r.daemon && shouldSave {
++			r.SaveImage(image)
++			shouldSave = false
++		}
++		// Implicit digest
++		if digest, ok := image.BigDataDigests[ImageDigestBigDataKey]; ok {
++			digests[digest] = append(digests[digest], images[n])
++		}
++		// Explicit digest
++		if image.Digest == "" {
++			image.Digest = image.BigDataDigests[ImageDigestBigDataKey]
++		} else if image.Digest != image.BigDataDigests[ImageDigestBigDataKey] {
++			digests[image.Digest] = append(digests[image.Digest], images[n])
+ 		}
+ 	}
++
+ 	r.images = images
+ 	r.idindex = truncindex.NewTruncIndex(idlist)
+ 	r.byid = ids
+ 	r.byname = names
+ 	r.bydigest = digests
++
++	r.loaded = true
++
+ 	return shouldSave, nil
+ }
+ 
+@@ -263,7 +390,25 @@ func (r *imageStore) Save() error {
+ 	return ioutils.AtomicWriteFile(rpath, jdata, 0600)
+ }
+ 
+-func newImageStore(readonly bool, dir string) (ImageStore, error) {
++func (r *imageStore) SaveImage(image *Image) error {
++	if !r.IsReadWrite() {
++		return errors.Wrapf(ErrStoreIsReadOnly, "not allowed to modify the image store at %q", r.imagespath())
++	}
++	if !r.Locked() {
++		return errors.New("image store is not locked")
++	}
++	rpath := r.imagePath(image.ID)
++	if err := os.MkdirAll(filepath.Dir(rpath), 0700); err != nil {
++		return err
++	}
++	jdata, err := json.Marshal(image)
++	if err != nil {
++		return err
++	}
++	return ioutils.AtomicWriteFile(rpath, jdata, 0600)
++}
++
++func newImageStore(daemon bool, readonly bool, dir string) (ImageStore, error) {
+ 	var err error
+ 	var lockfile, rolockfile filelocker.Locker
+ 	if !readonly {
+@@ -286,13 +431,14 @@ func newImageStore(readonly bool, dir string) (ImageStore, error) {
+ 		defer lockfile.Unlock()
+ 	}
+ 	istore := imageStore{
+-		lockfile: lockfile,
++		lockfile:   lockfile,
+ 		rolockfile: rolockfile,
+-		dir:      dir,
+-		images:   []*Image{},
+-		byid:     make(map[string]*Image),
+-		byname:   make(map[string]*Image),
+-		bydigest: make(map[digest.Digest][]*Image),
++		dir:        dir,
++		images:     []*Image{},
++		byid:       make(map[string]*Image),
++		byname:     make(map[string]*Image),
++		bydigest:   make(map[digest.Digest][]*Image),
++		daemon:     daemon,
+ 	}
+ 	if readonly {
+ 		err = istore.ROLoad()
+@@ -314,7 +460,7 @@ func newImageStore(readonly bool, dir string) (ImageStore, error) {
+ 	return &istore, nil
+ }
+ 
+-func newROImageStore(dir string) (ROImageStore, error) {
++func newROImageStore(daemon bool, dir string) (ROImageStore, error) {
+ 	lockfile, err := filelocker.GetROLockfile(filepath.Join(dir, "images.lock"))
+ 	if err != nil {
+ 		return nil, err
+@@ -328,6 +474,7 @@ func newROImageStore(dir string) (ROImageStore, error) {
+ 		byid:     make(map[string]*Image),
+ 		byname:   make(map[string]*Image),
+ 		bydigest: make(map[digest.Digest][]*Image),
++		daemon:   daemon,
+ 	}
+ 	if err := istore.Load(); err != nil {
+ 		return nil, err
+@@ -356,6 +503,9 @@ func (r *imageStore) ClearFlag(id string, flag string) error {
+ 		return ErrImageUnknown
+ 	}
+ 	delete(image.Flags, flag)
++	if r.daemon {
++		return r.SaveImage(image)
++	}
+ 	return r.Save()
+ }
+ 
+@@ -371,6 +521,9 @@ func (r *imageStore) SetFlag(id string, flag string, value interface{}) error {
+ 		image.Flags = make(map[string]interface{})
+ 	}
+ 	image.Flags[flag] = value
++	if r.daemon {
++		return r.SaveImage(image)
++	}
+ 	return r.Save()
+ }
+ 
+@@ -410,7 +563,7 @@ func (r *imageStore) Create(id string, names []string, layer, metadata string, c
+ 			BigDataSizes:   make(map[string]int64),
+ 			BigDataDigests: make(map[string]digest.Digest),
+ 			Created:        created,
+-			Loaded:			loaded,	// isulad add loaded time
++			Loaded:         loaded, // isulad add loaded time
+ 			Flags:          make(map[string]interface{}),
+ 		}
+ 		r.images = append(r.images, image)
+@@ -423,7 +576,11 @@ func (r *imageStore) Create(id string, names []string, layer, metadata string, c
+ 		for _, name := range names {
+ 			r.byname[name] = image
+ 		}
+-		err = r.Save()
++		if r.daemon {
++			err = r.SaveImage(image)
++		} else {
++			err = r.Save()
++		}
+ 		image = copyImage(image)
+ 	}
+ 	return image, err
+@@ -432,6 +589,9 @@ func (r *imageStore) Create(id string, names []string, layer, metadata string, c
+ func (r *imageStore) addMappedTopLayer(id, layer string) error {
+ 	if image, ok := r.lookup(id); ok {
+ 		image.MappedTopLayers = append(image.MappedTopLayers, layer)
++		if r.daemon {
++			return r.SaveImage(image)
++		}
+ 		return r.Save()
+ 	}
+ 	return ErrImageUnknown
+@@ -450,6 +610,9 @@ func (r *imageStore) SetMetadata(id, metadata string) error {
+ 	}
+ 	if image, ok := r.lookup(id); ok {
+ 		image.Metadata = metadata
++		if r.daemon {
++			return r.SaveImage(image)
++		}
+ 		return r.Save()
+ 	}
+ 	return ErrImageUnknown
+@@ -461,6 +624,9 @@ func (r *imageStore) SetLoadedTime(id string, loaded time.Time) error {
+ 	}
+ 	if image, ok := r.lookup(id); ok {
+ 		image.Loaded = loaded
++		if r.daemon {
++			return r.SaveImage(image)
++		}
+ 		return r.Save()
+ 	}
+ 	return ErrImageUnknown
+@@ -487,6 +653,9 @@ func (r *imageStore) SetNames(id string, names []string) error {
+ 			r.byname[name] = image
+ 		}
+ 		image.Names = names
++		if r.daemon {
++			return r.SaveImage(image)
++		}
+ 		return r.Save()
+ 	}
+ 	return ErrImageUnknown
+@@ -512,6 +681,9 @@ func (r *imageStore) AddName(id string, name string) error {
+ 			r.byname[name] = image
+ 		}
+ 		image.Names = names
++		if r.daemon {
++			return r.SaveImage(image)
++		}
+ 		return r.Save()
+ 	}
+ 	return ErrImageUnknown
+@@ -567,8 +739,10 @@ func (r *imageStore) Delete(id string) error {
+ 			}
+ 		}
+ 	}
+-	if err := r.Save(); err != nil {
+-		return err
++	if !r.daemon {
++		if err := r.Save(); err != nil {
++			return err
++		}
+ 	}
+ 	if err := os.RemoveAll(r.datadir(id)); err != nil {
+ 		return err
+@@ -754,7 +928,11 @@ func (r *imageStore) SetBigData(id, key string, data []byte) error {
+ 			}
+ 		}
+ 		if save {
+-			err = r.Save()
++			if r.daemon {
++				err = r.SaveImage(image)
++			} else {
++				err = r.Save()
++			}
+ 		}
+ 	}
+ 	return err
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index 56084fa..760b0b5 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -14,25 +14,26 @@ import (
+ 
+ 	drivers "github.com/containers/storage/drivers"
+ 	"github.com/containers/storage/pkg/archive"
++	"github.com/containers/storage/pkg/filelocker"
+ 	"github.com/containers/storage/pkg/idtools"
+ 	"github.com/containers/storage/pkg/ioutils"
+ 	"github.com/containers/storage/pkg/stringid"
+ 	"github.com/containers/storage/pkg/system"
+ 	"github.com/containers/storage/pkg/truncindex"
++	"github.com/docker/docker/pkg/mount"
+ 	"github.com/klauspost/pgzip"
+ 	digest "github.com/opencontainers/go-digest"
+ 	"github.com/opencontainers/selinux/go-selinux/label"
+ 	"github.com/pkg/errors"
++	"github.com/sirupsen/logrus"
+ 	"github.com/vbatts/tar-split/tar/asm"
+ 	"github.com/vbatts/tar-split/tar/storage"
+-	"github.com/containers/storage/pkg/filelocker"
+-	"github.com/sirupsen/logrus"
+-	"github.com/docker/docker/pkg/mount"
+ )
+ 
+ const (
+ 	tarSplitSuffix = ".tar-split.gz"
+ 	incompleteFlag = "incomplete"
++	layerNameLen   = 64
+ )
+ 
+ // A Layer is a record of a copy-on-write layer that's stored by the lower
+@@ -248,6 +249,10 @@ type layerStore struct {
+ 	byuncompressedsum map[digest.Digest][]string
+ 	uidMap            []idtools.IDMap
+ 	gidMap            []idtools.IDMap
++
++	// flag for daemon
++	daemon bool
++	loaded bool
+ }
+ 
+ func copyLayer(l *Layer) *Layer {
+@@ -287,14 +292,152 @@ func (r *layerStore) layerspath() string {
+ 	return filepath.Join(r.layerdir, "layers.json")
+ }
+ 
+-func (r *layerStore) loadHelper() (bool, error) {
+-	shouldSave := false
++func (r *layerStore) layerPath(id string) string {
++	return filepath.Join(r.layerdir, id, "layer.json")
++}
++
++func (r *layerStore) datadir(id string) string {
++	return filepath.Join(r.layerdir, id)
++}
++
++func (r *layerStore) layersFromSingleJson() ([]*Layer, error) {
++	layers := []*Layer{}
++
+ 	rpath := r.layerspath()
+ 	data, err := ioutil.ReadFile(rpath)
+ 	if err != nil && !os.IsNotExist(err) {
+-		return shouldSave, err
++		return layers, err
+ 	}
++
++	if err = json.Unmarshal(data, &layers); len(data) == 0 || err == nil {
++		return layers, nil
++	}
++
++	return layers, err
++}
++
++func (r *layerStore) migration() error {
+ 	layers := []*Layer{}
++
++	_, err := os.Stat(r.layerspath())
++	if err != nil && !os.IsNotExist(err) {
++		return err
++	} else if os.IsNotExist(err) {
++		return nil
++	}
++
++	layers, err = r.layersFromSingleJson()
++	if err != nil {
++		return err
++	}
++
++	for _, layer := range layers {
++		data, err := json.Marshal(layer)
++		if err != nil {
++			logrus.Errorf("Marshal layer error: %v", err)
++			return err
++		}
++
++		err = os.MkdirAll(r.datadir(layer.ID), 0700)
++		if err != nil {
++			logrus.Errorf("Create directory %s error: %v", r.datadir(layer.ID), err)
++			return err
++		}
++
++		if _, err := os.Stat(r.tspathDaemonLess(layer.ID)); err == nil {
++			err = os.Rename(r.tspathDaemonLess(layer.ID), r.tspathDaemon(layer.ID))
++			if err != nil {
++				logrus.Errorf("Rename %s to %s error: %v", r.tspathDaemonLess(layer.ID), r.tspathDaemon(layer.ID), err)
++				return err
++			}
++		}
++
++		err = ioutils.AtomicWriteFile(r.layerPath(layer.ID), data, 0600)
++		if err != nil {
++			logrus.Errorf("Write data to file %s error: %v", r.layerPath(layer.ID), err)
++			return err
++		}
++	}
++
++	return nil
++}
++
++func (r *layerStore) getLayersFromJson() ([]*Layer, error) {
++	if r.daemon {
++		layers := []*Layer{}
++
++		if err := r.migration(); err != nil {
++			return nil, err
++		}
++
++		// If error occured when walking directory, skip it to avoid start failure
++		err := filepath.Walk(r.layerdir, func(path string, info os.FileInfo, err error) error {
++			if err != nil {
++				logrus.Errorf("Walk layers directory error: %v", err)
++				return nil
++			}
++
++			// Layer's json is placed inside layer's data directory, so skip any other file or directory
++			if !info.IsDir() || info.Name() == filepath.Base(r.layerdir) || len(info.Name()) != layerNameLen {
++				return nil
++			}
++
++			rpath := r.layerPath(info.Name())
++			data, err := ioutil.ReadFile(rpath)
++			if err != nil {
++				logrus.Errorf("Found layer %v but load json failed: %v", info.Name(), err)
++				return nil
++			}
++
++			layer := &Layer{}
++			if err = json.Unmarshal(data, layer); err != nil {
++				logrus.Errorf("Unmarshal json %v failed: %v", rpath, err)
++				return nil
++			}
++
++			// If it's a layer of image, check if tar-split and driver data exist.
++			_, err = os.Stat(r.tspath(info.Name()))
++			if layer.UncompressedDigest != "" && (os.IsNotExist(err) || !r.driver.Exists(info.Name())) {
++				logrus.Errorf("Invalid data of layer %v, remove it", info.Name())
++				if err = os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
++					logrus.Errorf("Remove %v failed, err: %v", path, err)
++				}
++				if err = r.driver.Remove(info.Name()); err != nil && !os.IsNotExist(err) {
++					logrus.Errorf("Remove driver data of %v failed, err: %v", info.Name(), err)
++				}
++			} else {
++				layers = append(layers, layer)
++			}
++
++			return nil
++		})
++		if err != nil {
++			return layers, err
++		}
++
++		if err := os.Remove(r.layerspath()); err != nil && !os.IsNotExist(err) {
++			return layers, err
++		}
++
++		return layers, nil
++	} else {
++		return r.layersFromSingleJson()
++	}
++}
++
++func (r *layerStore) loadHelper() (bool, error) {
++	shouldSave := false
++
++	// Do not need reload if daemon
++	if r.loaded && r.daemon {
++		return false, nil
++	}
++
++	layers, err := r.getLayersFromJson()
++	if err != nil {
++		return false, err
++	}
++
+ 	idlist := []string{}
+ 	ids := make(map[string]*Layer)
+ 	names := make(map[string]*Layer)
+@@ -303,27 +446,30 @@ func (r *layerStore) loadHelper() (bool, error) {
+ 	if r.lockfile.IsReadWrite() {
+ 		label.ClearLabels()
+ 	}
+-	if err = json.Unmarshal(data, &layers); len(data) == 0 || err == nil {
+-		idlist = make([]string, 0, len(layers))
+-		for n, layer := range layers {
+-			ids[layer.ID] = layers[n]
+-			idlist = append(idlist, layer.ID)
+-			for _, name := range layer.Names {
+-				if conflict, ok := names[name]; ok {
+-					r.removeName(conflict, name)
+-					shouldSave = true
+-				}
+-				names[name] = layers[n]
+-			}
+-			if layer.CompressedDigest != "" {
+-				compressedsums[layer.CompressedDigest] = append(compressedsums[layer.CompressedDigest], layer.ID)
+-			}
+-			if layer.UncompressedDigest != "" {
+-				uncompressedsums[layer.UncompressedDigest] = append(uncompressedsums[layer.UncompressedDigest], layer.ID)
+-			}
+-			if layer.MountLabel != "" {
+-				label.ReserveLabel(layer.MountLabel)
++
++	idlist = make([]string, 0, len(layers))
++	for n, layer := range layers {
++		ids[layer.ID] = layers[n]
++		idlist = append(idlist, layer.ID)
++		for _, name := range layer.Names {
++			if conflict, ok := names[name]; ok {
++				r.removeName(conflict, name)
++				shouldSave = true
+ 			}
++			names[name] = layers[n]
++		}
++		if r.daemon && shouldSave {
++			r.SaveLayer(layer)
++			shouldSave = false
++		}
++		if layer.CompressedDigest != "" {
++			compressedsums[layer.CompressedDigest] = append(compressedsums[layer.CompressedDigest], layer.ID)
++		}
++		if layer.UncompressedDigest != "" {
++			uncompressedsums[layer.UncompressedDigest] = append(uncompressedsums[layer.UncompressedDigest], layer.ID)
++		}
++		if layer.MountLabel != "" {
++			label.ReserveLabel(layer.MountLabel)
+ 		}
+ 	}
+ 
+@@ -351,8 +497,17 @@ func (r *layerStore) loadHelper() (bool, error) {
+ 					shouldSave = true
+ 				}
+ 			}
++			if r.daemon && shouldSave {
++				r.SaveLayer(layer)
++				shouldSave = false
++			}
+ 		}
+ 	}
++
++	if err == nil {
++		r.loaded = true
++	}
++
+ 	return shouldSave, err
+ }
+ 
+@@ -391,13 +546,13 @@ func (r *layerStore) DeleteLayerMountPoint(layer *Layer) error {
+ 
+ func (r *layerStore) SaveLayerMountPoint(layer *Layer) error {
+ 	mpath := r.layerMountPointPath(layer.ID)
+-	mount := layerMountPoint {
+-		ID:		layer.ID,
++	mount := layerMountPoint{
++		ID:         layer.ID,
+ 		MountPoint: layer.MountPoint,
+ 		MountCount: layer.MountCount,
+ 	}
+ 	mdata, err := json.Marshal(&mount)
+-	if (err != nil) {
++	if err != nil {
+ 		return err
+ 	}
+ 	return ioutils.AtomicWriteFile(mpath, mdata, 0600)
+@@ -452,6 +607,35 @@ func (r *layerStore) Save() error {
+ 	return nil
+ }
+ 
++func (r *layerStore) SaveLayer(layer *Layer) error {
++	if layer == nil {
++		return nil
++	}
++	if !r.IsReadWrite() {
++		return errors.Wrapf(ErrStoreIsReadOnly, "not allowed to modify the layer store at %q", r.layerspath())
++	}
++	rpath := r.layerPath(layer.ID)
++	if err := os.MkdirAll(filepath.Dir(rpath), 0700); err != nil {
++		return err
++	}
++	jldata, err := json.Marshal(layer)
++	if err != nil {
++		return err
++	}
++	if err := ioutils.AtomicWriteFile(rpath, jldata, 0600); err != nil {
++		return err
++	}
++	return nil
++}
++
++func (r *layerStore) DeleteLayer(layer *Layer) error {
++	if layer == nil {
++		return nil
++	}
++	rpath := r.layerPath(layer.ID)
++	return os.RemoveAll(filepath.Dir(rpath))
++}
++
+ func newLayerStoreWithoutData(rundir string, layerdir string, driver drivers.Driver, uidMap, gidMap []idtools.IDMap) (LayerStore, error) {
+ 	var err error
+ 	var lockfile filelocker.Locker
+@@ -473,7 +657,7 @@ func newLayerStoreWithoutData(rundir string, layerdir string, driver drivers.Dri
+ 	return &rlstore, nil
+ }
+ 
+-func newLayerStore(readonly bool, rundir string, layerdir string, driver drivers.Driver, uidMap, gidMap []idtools.IDMap) (LayerStore, error) {
++func newLayerStore(daemon bool, readonly bool, rundir string, layerdir string, driver drivers.Driver, uidMap, gidMap []idtools.IDMap) (LayerStore, error) {
+ 	if !readonly {
+ 		if err := os.MkdirAll(rundir, 0700); err != nil {
+ 			return nil, err
+@@ -501,15 +685,16 @@ func newLayerStore(readonly bool, rundir string, layerdir string, driver drivers
+ 		defer lockfile.Unlock()
+ 	}
+ 	rlstore := layerStore{
+-		lockfile: lockfile,
++		lockfile:   lockfile,
+ 		rolockfile: rolockfile,
+-		driver:   driver,
+-		rundir:   rundir,
+-		layerdir: layerdir,
+-		byid:     make(map[string]*Layer),
+-		byname:   make(map[string]*Layer),
+-		uidMap:   copyIDMap(uidMap),
+-		gidMap:   copyIDMap(gidMap),
++		driver:     driver,
++		rundir:     rundir,
++		layerdir:   layerdir,
++		byid:       make(map[string]*Layer),
++		byname:     make(map[string]*Layer),
++		uidMap:     copyIDMap(uidMap),
++		gidMap:     copyIDMap(gidMap),
++		daemon:     daemon,
+ 	}
+ 	if readonly {
+ 		err = rlstore.ROLoad()
+@@ -531,7 +716,7 @@ func newLayerStore(readonly bool, rundir string, layerdir string, driver drivers
+ 	return &rlstore, nil
+ }
+ 
+-func newROLayerStore(rundir string, layerdir string, driver drivers.Driver) (ROLayerStore, error) {
++func newROLayerStore(daemon bool, rundir string, layerdir string, driver drivers.Driver) (ROLayerStore, error) {
+ 	lockfile, err := filelocker.GetROLockfile(filepath.Join(layerdir, "layers.lock"))
+ 	if err != nil {
+ 		return nil, err
+@@ -545,6 +730,7 @@ func newROLayerStore(rundir string, layerdir string, driver drivers.Driver) (ROL
+ 		layerdir: layerdir,
+ 		byid:     make(map[string]*Layer),
+ 		byname:   make(map[string]*Layer),
++		daemon:   daemon,
+ 	}
+ 	if err := rlstore.Load(); err != nil {
+ 		return nil, err
+@@ -587,6 +773,9 @@ func (r *layerStore) ClearFlag(id string, flag string) error {
+ 		return ErrLayerUnknown
+ 	}
+ 	delete(layer.Flags, flag)
++	if r.daemon {
++		return r.SaveLayer(layer)
++	}
+ 	return r.Save()
+ }
+ 
+@@ -602,6 +791,9 @@ func (r *layerStore) SetFlag(id string, flag string, value interface{}) error {
+ 		layer.Flags = make(map[string]interface{})
+ 	}
+ 	layer.Flags[flag] = value
++	if r.daemon {
++		return r.SaveLayer(layer)
++	}
+ 	return r.Save()
+ }
+ 
+@@ -698,7 +890,11 @@ func (r *layerStore) Put(id string, parentLayer *Layer, names []string, mountLab
+ 		}
+ 		if diff != nil {
+ 			layer.Flags[incompleteFlag] = true
+-			err = r.Save()
++			if r.daemon {
++				err = r.SaveLayer(layer)
++			} else {
++				err = r.Save()
++			}
+ 			if err != nil {
+ 				// We don't have a record of this layer, but at least
+ 				// try to clean it up underneath us.
+@@ -716,7 +912,11 @@ func (r *layerStore) Put(id string, parentLayer *Layer, names []string, mountLab
+ 			}
+ 			delete(layer.Flags, incompleteFlag)
+ 		}
+-		err = r.Save()
++		if r.daemon {
++			err = r.SaveLayer(layer)
++		} else {
++			err = r.Save()
++		}
+ 		if err != nil {
+ 			// We don't have a record of this layer, but at least
+ 			// try to clean it up underneath us.
+@@ -886,6 +1086,9 @@ func (r *layerStore) SetNames(id string, names []string) error {
+ 			r.byname[name] = layer
+ 		}
+ 		layer.Names = names
++		if r.daemon {
++			return r.SaveLayer(layer)
++		}
+ 		return r.Save()
+ 	}
+ 	return ErrLayerUnknown
+@@ -904,15 +1107,29 @@ func (r *layerStore) SetMetadata(id, metadata string) error {
+ 	}
+ 	if layer, ok := r.lookup(id); ok {
+ 		layer.Metadata = metadata
++		if r.daemon {
++			return r.SaveLayer(layer)
++		}
+ 		return r.Save()
+ 	}
+ 	return ErrLayerUnknown
+ }
+ 
+-func (r *layerStore) tspath(id string) string {
++func (r *layerStore) tspathDaemon(id string) string {
++	return filepath.Join(r.layerdir, id, id+tarSplitSuffix)
++}
++
++func (r *layerStore) tspathDaemonLess(id string) string {
+ 	return filepath.Join(r.layerdir, id+tarSplitSuffix)
+ }
+ 
++func (r *layerStore) tspath(id string) string {
++	if r.daemon {
++		return r.tspathDaemon(id)
++	}
++	return r.tspathDaemonLess(id)
++}
++
+ func (r *layerStore) Delete(id string) error {
+ 	var err error
+ 	if !r.IsReadWrite() {
+@@ -968,7 +1185,7 @@ func (r *layerStore) Delete(id string) error {
+ 		}
+ 	}
+ 	err = r.driver.Remove(id)
+-	if save_err := r.Save(); save_err != nil {
++	if save_err := r.DeleteLayer(layer); save_err != nil {
+ 		if err == nil {
+ 			err = save_err
+ 		}
+@@ -1089,7 +1306,7 @@ func (r *layerStore) newFileGetter(id string) (drivers.FileGetCloser, error) {
+ 
+ func (r *layerStore) CheckLayer(id string) error {
+ 
+-	logrus.Debugf("Checking Layer %s",id)
++	logrus.Debugf("Checking Layer %s", id)
+ 
+ 	if !r.driver.Exists(id) {
+ 		logrus.Warnf("Invalid data of layer %s", id)
+@@ -1321,7 +1538,11 @@ func (r *layerStore) ApplyDiff(to string, diff io.Reader) (size int64, err error
+ 	layer.UncompressedSize = uncompressedCounter.Count
+ 	layer.CompressionType = compression
+ 
+-	err = r.Save()
++	if r.daemon {
++		err = r.SaveLayer(layer)
++	} else {
++		err = r.Save()
++	}
+ 
+ 	return size, err
+ }
+@@ -1380,16 +1601,16 @@ func newLayerVerifiedReadCloser(readcloser io.ReadCloser, dg digest.Digest) (io.
+ 		return nil, err
+ 	}
+ 	return &layerVerifiedReadCloser{
+-		readcloser:             readcloser,
+-		digest:                 dg,
+-		digestverifier:         layerVerifier,
++		readcloser:     readcloser,
++		digest:         dg,
++		digestverifier: layerVerifier,
+ 	}, nil
+ }
+ 
+ type layerVerifiedReadCloser struct {
+-	readcloser          io.ReadCloser
+-	digest              digest.Digest
+-	digestverifier      digest.Verifier
++	readcloser     io.ReadCloser
++	digest         digest.Digest
++	digestverifier digest.Verifier
+ }
+ 
+ func (lvrc *layerVerifiedReadCloser) Read(d []byte) (s int, err error) {
+diff --git a/vendor/github.com/containers/storage/store.go b/vendor/github.com/containers/storage/store.go
+index 522920c..b327274 100644
+--- a/vendor/github.com/containers/storage/store.go
++++ b/vendor/github.com/containers/storage/store.go
+@@ -150,6 +150,7 @@ type StoreOptions struct {
+ 	GIDMap        []idtools.IDMap `json:"gidmap,omitempty"`
+ 	ReadOnly      bool
+ 	DonotLoadData bool
++	Daemon        bool
+ }
+ 
+ // Store wraps up the various types of file-based stores that we use into a
+@@ -542,6 +543,9 @@ type store struct {
+ 	roImageStores   []ROImageStore
+ 	containerStore  ContainerStore
+ 	checkedLayers   map[string]bool
++
++	// flag for daemon
++	daemon bool
+ }
+ 
+ // GetStore attempts to find an already-created Store object matching the
+@@ -620,6 +624,7 @@ func GetStore(options StoreOptions) (Store, error) {
+ 		graphOptions:    options.GraphDriverOptions,
+ 		uidMap:          copyIDMap(options.UIDMap),
+ 		gidMap:          copyIDMap(options.GIDMap),
++		daemon:          options.Daemon,
+ 	}
+ 	/* do not load data */
+ 	if options.DonotLoadData {
+@@ -704,7 +709,7 @@ func (s *store) loadWithROLock() error {
+ 
+ 	gipath := filepath.Join(s.graphRoot, driverPrefix+"images")
+ 
+-	ris, err := newImageStore(true, gipath)
++	ris, err := newImageStore(s.daemon, true, gipath)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -712,7 +717,7 @@ func (s *store) loadWithROLock() error {
+ 
+ 	gcpath := filepath.Join(s.graphRoot, driverPrefix+"containers")
+ 
+-	rcs, err := newContainerStore(true, gcpath)
++	rcs, err := newContainerStore(s.daemon, true, gcpath)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -775,7 +780,7 @@ func (s *store) load() error {
+ 	if err := os.MkdirAll(gipath, 0700); err != nil {
+ 		return err
+ 	}
+-	ris, err := newImageStore(false, gipath)
++	ris, err := newImageStore(s.daemon, false, gipath)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -788,7 +793,7 @@ func (s *store) load() error {
+ 	if err := os.MkdirAll(gcpath, 0700); err != nil {
+ 		return err
+ 	}
+-	rcs, err := newContainerStore(false, gcpath)
++	rcs, err := newContainerStore(s.daemon, false, gcpath)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -822,11 +827,6 @@ func (s *store) getGraphDriver() (drivers.Driver, error) {
+ func (s *store) GraphDriver() (drivers.Driver, error) {
+ 	s.graphLock.Lock()
+ 	defer s.graphLock.Unlock()
+-	if s.graphLock.TouchedSince(s.lastLoaded) {
+-		s.graphDriver = nil
+-		s.layerStore = nil
+-		s.lastLoaded = time.Now()
+-	}
+ 	return s.getGraphDriver()
+ }
+ 
+@@ -843,11 +843,6 @@ func (s *store) LayerROStore() (LayerStore, error) {
+ func (s *store) LayerStore() (LayerStore, error) {
+ 	s.graphLock.Lock()
+ 	defer s.graphLock.Unlock()
+-	if s.graphLock.TouchedSince(s.lastLoaded) {
+-		s.graphDriver = nil
+-		s.layerStore = nil
+-		s.lastLoaded = time.Now()
+-	}
+ 	return s.layerStoreHelper(false)
+ }
+ 
+@@ -891,7 +886,7 @@ func (s *store) layerStoreHelper(readonly bool) (LayerStore, error) {
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-	rls, err := newLayerStore(false, rlpath, glpath, driver, s.uidMap, s.gidMap)
++	rls, err := newLayerStore(s.daemon, false, rlpath, glpath, driver, s.uidMap, s.gidMap)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -919,7 +914,7 @@ func (s *store) ROLayerStores() ([]ROLayerStore, error) {
+ 	}
+ 	for _, store := range driver.AdditionalImageStores() {
+ 		glpath := filepath.Join(store, driverPrefix+"layers")
+-		rls, err := newROLayerStore(rlpath, glpath, driver)
++		rls, err := newROLayerStore(s.daemon, rlpath, glpath, driver)
+ 		if err != nil {
+ 			return nil, err
+ 		}
+@@ -952,7 +947,7 @@ func (s *store) ROImageStores() ([]ROImageStore, error) {
+ 	driverPrefix := s.graphDriverName + "-"
+ 	for _, store := range driver.AdditionalImageStores() {
+ 		gipath := filepath.Join(store, driverPrefix+"images")
+-		ris, err := newROImageStore(gipath)
++		ris, err := newROImageStore(s.daemon, gipath)
+ 		if err != nil {
+ 			return nil, err
+ 		}
+@@ -1404,11 +1399,21 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
+ 		storageOpts = storageOptions.(map[string]string)
+ 	}
+ 
+-	clayer, err := rlstore.Create(layer, imageTopLayer, nil, options.Flags["MountLabel"].(string), storageOpts, layerOptions, true)
++	layerNames := []string{}
++	if len(names) > 0 {
++		layerName := names[0] + "-layer"
++		layerNames = append(layerNames, layerName)
++	}
++	clayer, err := rlstore.Create(layer, imageTopLayer, layerNames, options.Flags["MountLabel"].(string), storageOpts, layerOptions, true)
+ 	if err != nil {
+ 		return nil, err
+ 	}
++
+ 	layer = clayer.ID
++	tmpLayer, err := rlstore.Get(layer)
++	if err != nil {
++		return nil, err
++	}
+ 	rcstore, err := s.ContainerStore()
+ 	if err != nil {
+ 		return nil, err
+@@ -1428,6 +1433,7 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
+ 	if err != nil || container == nil {
+ 		rlstore.Delete(layer)
+ 	}
++	container.MountPoint = tmpLayer.MountPoint
+ 	if err = s.SaveContainerRunJson(container); err != nil {
+ 		rlstore.Delete(layer)
+ 		return nil, err
+@@ -3244,19 +3250,21 @@ func (s *store) ContainerByLayer(id string) (*Container, error) {
+ }
+ 
+ func (s *store) ContainerDirectory(id string) (string, error) {
+-	rcstore, err := s.ContainerStore()
+-	if err != nil {
+-		return "", err
+-	}
+-	rcstore.Lock()
+-	defer rcstore.Unlock()
+-	if modified, err := rcstore.Modified(); modified || err != nil {
+-		rcstore.Load()
+-	}
++	if !s.daemon {
++		rcstore, err := s.ContainerStore()
++		if err != nil {
++			return "", err
++		}
++		rcstore.Lock()
++		defer rcstore.Unlock()
++		if modified, err := rcstore.Modified(); modified || err != nil {
++			rcstore.Load()
++		}
+ 
+-	id, err = rcstore.Lookup(id)
+-	if err != nil {
+-		return "", err
++		id, err = rcstore.Lookup(id)
++		if err != nil {
++			return "", err
++		}
+ 	}
+ 
+ 	middleDir := s.graphDriverName + "-containers"
+@@ -3268,20 +3276,22 @@ func (s *store) ContainerDirectory(id string) (string, error) {
+ }
+ 
+ func (s *store) ContainerRunDirectory(id string) (string, error) {
+-	rcstore, err := s.ContainerStore()
+-	if err != nil {
+-		return "", err
+-	}
++	if !s.daemon {
++		rcstore, err := s.ContainerStore()
++		if err != nil {
++			return "", err
++		}
+ 
+-	rcstore.Lock()
+-	defer rcstore.Unlock()
+-	if modified, err := rcstore.Modified(); modified || err != nil {
+-		rcstore.Load()
+-	}
++		rcstore.Lock()
++		defer rcstore.Unlock()
++		if modified, err := rcstore.Modified(); modified || err != nil {
++			rcstore.Load()
++		}
+ 
+-	id, err = rcstore.Lookup(id)
+-	if err != nil {
+-		return "", err
++		id, err = rcstore.Lookup(id)
++		if err != nil {
++			return "", err
++		}
+ 	}
+ 
+ 	middleDir := s.graphDriverName + "-containers"
+@@ -3336,6 +3346,7 @@ func (s *store) Shutdown(force bool) ([]string, error) {
+ 	mounted := []string{}
+ 	modified := false
+ 
++	logrus.Warn("Store is shutting down")
+ 	rlstore, err := s.LayerStore()
+ 	if err != nil {
+ 		return mounted, err
+-- 
+2.19.1
+

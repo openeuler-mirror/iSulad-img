@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -22,7 +22,6 @@ import (
 	"github.com/containers/storage"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
 )
 
 var (
@@ -49,43 +48,30 @@ func getContainerStorageFsInfo(store storage.Store, containerpath string) (*File
 	return &usage, nil
 }
 
-func containerFilesystemUsageHandler(c *cli.Context) error {
-
-	if len(c.Args()) != 1 {
-		cli.ShowCommandHelp(c, "filesystemusage")
-		return errors.New("Exactly one arguments expected")
-	}
-
-	containerName2 := c.Args()[0]
-	logrus.Debugf("filesystem usage Request: %+v", containerName2)
-
-	store, err := getStorageStore(true, c)
+func containerFilesystemUsage(gopts *globalOptions, containerName2 string) ([]byte, error) {
+	imageService, err := getImageService(gopts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	ctx, cancel := commandTimeoutContextFromGlobalOptions(c)
-	defer cancel()
-
-	imageService, err := getImageService(ctx, c, store)
-	if err != nil {
-		return err
-	}
-
-	storageRuntimeService := getRuntimeService(ctx, "", imageService)
+	storageRuntimeService := getRuntimeService("", imageService)
 	if storageRuntimeService == nil {
-		return errors.New("Failed to get storageRuntimeService")
+		return nil, errors.New("Failed to get storageRuntimeService")
 	}
 
 	layerID, err := storageRuntimeService.GetContainerLayerID(containerName2)
 	if err != nil {
-		return fmt.Errorf("failed to get container %s layerid: %v", containerName2, err)
+		return nil, fmt.Errorf("failed to get container %s layerid: %v", containerName2, err)
+	}
+
+	store, err := getStorageStore(gopts)
+	if err != nil {
+		return nil, err
 	}
 
 	fsUsage, err := getContainerStorageFsInfo(store, layerID)
-
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	resp := &ImageFsInfoResponse{
@@ -96,21 +82,7 @@ func containerFilesystemUsageHandler(c *cli.Context) error {
 
 	data, err := json.Marshal(resp)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	fmt.Printf("%s\n", data)
-	return err
-}
-
-var containerFilesystemUsageCmd = cli.Command{
-	Name:  "filesystemusage",
-	Usage: "isulad_kit containerfsinfo [OPTIONS]",
-	Description: fmt.Sprintf(`
-
-	Get container filesystem usage.
-
-	`),
-	ArgsUsage: "[ID|NAME]",
-	Action:    containerFilesystemUsageHandler,
-	Flags:     []cli.Flag{},
+	return data, err
 }

@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -22,14 +22,33 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	istorage "github.com/containers/image/storage"
+	"github.com/containers/image/transports/alltransports"
 	"github.com/containers/image/types"
 	cstorage "github.com/containers/storage"
 	"github.com/docker/docker/pkg/homedir"
-	"github.com/opencontainers/image-spec/specs-go/v1"
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/urfave/cli"
 )
+
+type globalOptions struct {
+	RunRoot            string
+	GraphRoot          string
+	GraphDriverName    string
+	GraphDriverOptions []string
+	storageOpts        map[string]string
+	InsecureRegistries []string
+	Registries         []string
+	Policy             string
+	InsecurePolicy     bool
+	CmdTimeout         time.Duration
+	TLSVerify          bool
+	UseDecryptedKey    bool
+
+	Daemon bool
+}
 
 // AuthInfo provide basic information about auth.
 type AuthInfo struct {
@@ -44,13 +63,13 @@ func defaultAuthFilePath() string {
 	return filepath.Join(homedir.Get(), ".isulad/auths.json")
 }
 
-func useDecryptedKey(c *cli.Context, flagPrefix string) types.OptionalBool {
+func useDecryptedKey(c *cli.Context, flagPrefix string) bool {
 	if c.IsSet(flagPrefix + "use-decrypted-key") {
-		return types.NewOptionalBool(c.BoolT(flagPrefix + "use-decrypted-key"))
+		return c.BoolT(flagPrefix + "use-decrypted-key")
 	}
 
 	// If not set, default true.
-	return types.NewOptionalBool(true)
+	return true
 }
 
 func tlsVerify(c *cli.Context, flagPrefix string) bool {
@@ -76,7 +95,7 @@ func contextFromGlobalOptions(c *cli.Context, flagPrefix string) (*types.SystemC
 		DockerDaemonHost:                  c.String(flagPrefix + "daemon-host"),
 		DockerDaemonCertPath:              c.String(flagPrefix + "cert-dir"),
 		DockerDaemonInsecureSkipTLSVerify: !c.BoolT(flagPrefix + "tls-verify"),
-		UseDecryptedKey:                   useDecryptedKey(c, flagPrefix),
+		UseDecryptedKey:                   types.NewOptionalBool(useDecryptedKey(c, flagPrefix)),
 	}
 	if c.IsSet(flagPrefix + "creds") {
 		var err error
@@ -94,11 +113,11 @@ func contextFromGlobalOptions(c *cli.Context, flagPrefix string) (*types.SystemC
 	return ctx, nil
 }
 
-func commandTimeoutContextFromGlobalOptions(c *cli.Context) (context.Context, context.CancelFunc) {
+func commandTimeoutContextFromGlobalOptions(gopts *globalOptions) (context.Context, context.CancelFunc) {
 	ctx := context.Background()
 	var cancel context.CancelFunc = func() {}
-	if c.GlobalDuration("command-timeout") > 0 {
-		ctx, cancel = context.WithTimeout(ctx, c.GlobalDuration("command-timeout"))
+	if gopts.CmdTimeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, gopts.CmdTimeout)
 	}
 	return ctx, cancel
 }
@@ -128,11 +147,37 @@ func getDockerAuth(creds string) (*types.DockerAuthConfig, error) {
 	}, nil
 }
 
-func getMountPoint(c *cli.Context, idOrName string) (string, error) {
-	_, cancel := commandTimeoutContextFromGlobalOptions(c)
-	defer cancel()
+// parseImage converts image URL-like string to an initialized handler for that image.
+// The caller must call .Close() on the returned ImageCloser.
+func parseImage(ctx context.Context, c *cli.Context) (types.ImageCloser, error) {
+	imgName := c.Args().First()
+	ref, err := alltransports.ParseImageName(imgName)
+	if err != nil {
+		return nil, err
+	}
+	sys, err := contextFromGlobalOptions(c, "")
+	if err != nil {
+		return nil, err
+	}
+	return ref.NewImage(ctx, sys)
+}
 
-	store, err := getEmptyStorageStore(c)
+// parseImageSource converts image URL-like string to an ImageSource.
+// The caller must call .Close() on the returned ImageSource.
+func parseImageSource(ctx context.Context, c *cli.Context, name string) (types.ImageSource, error) {
+	ref, err := alltransports.ParseImageName(name)
+	if err != nil {
+		return nil, err
+	}
+	sys, err := contextFromGlobalOptions(c, "")
+	if err != nil {
+		return nil, err
+	}
+	return ref.NewImageSource(ctx, sys)
+}
+
+func getMountPoint(gopts *globalOptions, idOrName string) (string, error) {
+	store, err := getStorageStore(gopts)
 	if err != nil {
 		return "", err
 	}
@@ -143,6 +188,20 @@ func getMountPoint(c *cli.Context, idOrName string) (string, error) {
 	}
 
 	return mountPoint, nil
+}
+
+func putMountPoint(gopts *globalOptions, idOrName string, force bool) (bool, error) {
+	store, err := getStorageStore(gopts)
+	if err != nil {
+		return false, err
+	}
+
+	isMounted, err := store.Unmount(idOrName, force)
+	if err != nil {
+		return false, fmt.Errorf("Failed to unmount container %s: %v", idOrName, err)
+	}
+
+	return isMounted, nil
 }
 
 func checkJSONFileSize(path string) error {
@@ -232,4 +291,26 @@ func getHealthcheck(store cstorage.Store, containerImageName string) (*HealthCon
 		return nil, err
 	}
 	return config.Config.Healthcheck, nil
+}
+
+func getGlobalOptions(c *cli.Context) (*globalOptions, error) {
+	storageOpts, err := getStorageOptions(c)
+	if err != nil {
+		return nil, err
+	}
+
+	return &globalOptions{
+		RunRoot:            c.GlobalString("run-root"),
+		GraphRoot:          c.GlobalString("graph-root"),
+		GraphDriverName:    c.GlobalString("driver-name"),
+		GraphDriverOptions: c.GlobalStringSlice("driver-options"),
+		storageOpts:        storageOpts,
+		InsecureRegistries: c.GlobalStringSlice("insecure-registry"),
+		Registries:         c.GlobalStringSlice("registry"),
+		Policy:             c.GlobalString("policy"),
+		InsecurePolicy:     c.GlobalBool("insecure-policy"),
+		CmdTimeout:         c.GlobalDuration("command-timeout"),
+		TLSVerify:          tlsVerify(c, ""),
+		UseDecryptedKey:    useDecryptedKey(c, ""),
+	}, nil
 }

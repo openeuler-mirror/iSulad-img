@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -17,30 +17,15 @@ import (
 	"fmt"
 
 	"github.com/pkg/errors"
-	"github.com/urfave/cli"
 )
 
-func containerRemoveHandler(c *cli.Context) error {
-	if len(c.Args()) != 1 {
-		cli.ShowCommandHelp(c, "rm")
-		return errors.New("Exactly one arguments expected")
-	}
-
-	idOrName := c.Args()[0]
-	store, err := getStorageStore(true, c)
+func containerRemove(gopts *globalOptions, idOrName string) error {
+	imageService, err := getImageService(gopts)
 	if err != nil {
 		return err
 	}
 
-	ctx, cancel := commandTimeoutContextFromGlobalOptions(c)
-	defer cancel()
-
-	imageService, err := getImageService(ctx, c, store)
-	if err != nil {
-		return err
-	}
-
-	storageRuntimeService := getRuntimeService(ctx, "", imageService)
+	storageRuntimeService := getRuntimeService("", imageService)
 	if storageRuntimeService == nil {
 		return errors.New("Failed to get storageRuntimeService")
 	}
@@ -50,17 +35,4 @@ func containerRemoveHandler(c *cli.Context) error {
 		return fmt.Errorf("failed to remove container %s: %v", idOrName, err)
 	}
 	return err
-}
-
-var containerRemoveCmd = cli.Command{
-	Name:  "rm",
-	Usage: "isulad_kit rm [ID|NAME]",
-	Description: fmt.Sprintf(`
-
-	Remove a container's filesystem.
-
-	`),
-	ArgsUsage: "[ID|NAME]",
-	Action:    containerRemoveHandler,
-	Flags:     []cli.Flag{},
 }

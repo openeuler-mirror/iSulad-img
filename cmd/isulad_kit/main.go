@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -28,6 +28,9 @@ import (
 
 // gitCommit will be the hash
 var gitCommit = ""
+var gImageService ImageServer
+var gStore cstorage.Store
+var gContainerServer ContainerServer
 
 const (
 	defaultTransport       = "docker://"
@@ -110,24 +113,9 @@ func createApp() *cli.App {
 		return nil
 	}
 	app.Commands = []cli.Command{
-		pullCmd,
 		infoCmd,
 		imagesCmd,
-		imageStatusCmd,
-		imageRemoveCmd,
-		imageFsinfoCmd,
-		mountCmd,
-		uMountCmd,
-		containerPrepareCmd,
-		containerRemoveCmd,
-		copyCmd,
-		storageStatusCmd,
-		storageUmountCmd,
-		containerFilesystemUsageCmd,
-		exportCmd,
-		loadCmd,
-		loginCmd,
-		logoutCmd,
+		daemonCmd,
 	}
 	return app
 }
@@ -142,42 +130,63 @@ func main() {
 	}
 }
 
-func getStorageStore(readonly bool, c *cli.Context) (cstorage.Store, error) {
-	return cstorage.GetStore(cstorage.StoreOptions{
-		RunRoot:            c.GlobalString("run-root"),
-		GraphRoot:          c.GlobalString("graph-root"),
-		GraphDriverName:    c.GlobalString("driver-name"),
-		GraphDriverOptions: c.GlobalStringSlice("driver-options"),
-		ReadOnly:           readonly,
+func getStorageStore(gopts *globalOptions) (cstorage.Store, error) {
+	var err error
+
+	if gStore != nil {
+		return gStore, nil
+	}
+
+	gStore, err = cstorage.GetStore(cstorage.StoreOptions{
+		RunRoot:            gopts.RunRoot,
+		GraphRoot:          gopts.GraphRoot,
+		GraphDriverName:    gopts.GraphDriverName,
+		GraphDriverOptions: gopts.GraphDriverOptions,
+		ReadOnly:           false,
+		Daemon:             gopts.Daemon,
 	})
+
+	return gStore, err
 }
 
-func getEmptyStorageStore(c *cli.Context) (cstorage.Store, error) {
-	return cstorage.GetStore(cstorage.StoreOptions{
-		RunRoot:            c.GlobalString("run-root"),
-		GraphRoot:          c.GlobalString("graph-root"),
-		GraphDriverName:    c.GlobalString("driver-name"),
-		GraphDriverOptions: c.GlobalStringSlice("driver-options"),
-		ReadOnly:           true,
-		DonotLoadData:      true,
-	})
+func getImageService(gopts *globalOptions) (ImageServer, error) {
+	var err error
+	var store cstorage.Store
+
+	if gImageService != nil {
+		return gImageService, nil
+	}
+
+	store, err = getStorageStore(gopts)
+	if err != nil {
+		return nil, err
+	}
+
+	gImageService, err = InitImageService(context.Background(), store, defaultTransport,
+		gopts.InsecureRegistries, gopts.Registries)
+	if err != nil {
+		return nil, err
+	}
+
+	return gImageService, nil
 }
 
-func getImageService(ctx context.Context, c *cli.Context, store cstorage.Store) (ImageServer, error) {
-	return InitImageService(ctx, store, defaultTransport,
-		c.GlobalStringSlice("insecure-registry"), c.GlobalStringSlice("registry"))
-}
+func getRuntimeService(pauseImage string, imageService ImageServer) ContainerServer {
+	if gContainerServer != nil {
+		return gContainerServer
+	}
 
-func getRuntimeService(ctx context.Context, pauseImage string, imageService ImageServer) ContainerServer {
-	return GetContainerLifeService(ctx, imageService, pauseImage)
+	gContainerServer = GetContainerLifeService(context.Background(), imageService, pauseImage)
+
+	return gContainerServer
 }
 
 // getPolicyContext handles the global "policy" flag.
-func getPolicyContext(c *cli.Context) (*signature.PolicyContext, error) {
-	policyPath := c.GlobalString("policy")
+func getPolicyContext(gopts *globalOptions) (*signature.PolicyContext, error) {
+	policyPath := gopts.Policy
 	var policy *signature.Policy // This could be cached across calls, if we had an application context.
 	var err error
-	if c.GlobalBool("insecure-policy") {
+	if gopts.InsecurePolicy {
 		policy = &signature.Policy{Default: []signature.PolicyRequirement{signature.NewPRInsecureAcceptAnything()}}
 	} else if policyPath == "" {
 		policy, err = signature.DefaultPolicy(nil)

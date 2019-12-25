@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -13,23 +13,8 @@
 
 package main
 
-import (
-	"fmt"
-
-	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
-)
-
-func storageUmountHandler(c *cli.Context) error {
-	if len(c.Args()) > 0 {
-		cli.ShowCommandHelp(c, "storage_umount")
-		return errors.New("No arguments expected")
-	}
-
-	logrus.Debugf("Storage umount Requested")
-
-	store, err := getStorageStore(true, c)
+func storageUmount(gopts *globalOptions) error {
+	store, err := getStorageStore(gopts)
 	if err != nil {
 		return err
 	}
@@ -42,17 +27,4 @@ func storageUmountHandler(c *cli.Context) error {
 	err = driver.Cleanup()
 
 	return err
-}
-
-var storageUmountCmd = cli.Command{
-	Name:  "storage_umount",
-	Usage: "isulad_kit storage_umount",
-	Description: fmt.Sprintf(`
-
-	Umount storage mount point.
-
-	`),
-	ArgsUsage: " ",
-	Action:    storageUmountHandler,
-	Flags:     []cli.Flag{},
 }

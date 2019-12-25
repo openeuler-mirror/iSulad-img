@@ -1,12 +1,12 @@
-From df45ed1c8054bedd713a8355c4af177b90379cbf Mon Sep 17 00:00:00 2001
+From 7734cae0053c7d784953ccbfc89fa167d128684b Mon Sep 17 00:00:00 2001
 From: WuJing <wujing50@huawei.com>
 Date: Mon, 13 May 2019 09:31:43 +0800
-Subject: [PATCH 15/31] isulad-kit-vendor: ensure remove container rootfs dir
+Subject: [PATCH 15/37] isulad-kit-vendor: ensure remove container rootfs dir
  when errmsg contain "File name too long"
 
 Signed-off-by: WuJing <wujing50@huawei.com>
 ---
- vendor/github.com/containers/storage/drivers/overlay/overlay.go | 9 ++++++++-
+ .../containers/storage/drivers/overlay/overlay.go        | 9 ++++++++-
  1 file changed, 8 insertions(+), 1 deletion(-)
 
 diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
@@ -30,5 +30,5 @@ index 62fd5ed..a63f0d1 100644
  	return nil
  }
 -- 
-1.8.3.1
+2.19.1
 

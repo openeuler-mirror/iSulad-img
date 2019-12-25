@@ -1,15 +1,15 @@
-From 1e13a1c8251a43dd5ffbbcd797ca5c23bc52c778 Mon Sep 17 00:00:00 2001
+From b4a137907bff40b93880f5100313cd8e59457e2c Mon Sep 17 00:00:00 2001
 From: LiuHao <liuhao27@huawei.com>
 Date: Sat, 25 May 2019 16:45:28 +0800
-Subject: [PATCH 20/31] optimize mount operator
+Subject: [PATCH 20/37] optimize mount operator
 
 1. split mountpoints.json to each container
 2. refactor mount operator
 
 Signed-off-by: LiuHao <liuhao27@huawei.com>
 ---
- vendor/github.com/containers/storage/layers.go | 197 +++++++++++++------------
- vendor/github.com/containers/storage/store.go  | 157 +++++++++++++++++---
+ .../github.com/containers/storage/layers.go   | 197 +++++++++---------
+ vendor/github.com/containers/storage/store.go | 157 ++++++++++++--
  2 files changed, 234 insertions(+), 120 deletions(-)
 
 diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
@@ -605,5 +605,5 @@ index 4d96bb3..da36720 100644
  	ReloadConfigurationFile(defaultConfigFile, &DefaultStoreOptions)
  }
 -- 
-1.8.3.1
+2.19.1
 

@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -45,10 +45,12 @@ type containerLifeService struct {
 
 // ContainerSpec ContainerSpec
 type ContainerSpec struct {
-	ID      string
-	RootDir string
-	RunDir  string
-	Config  *v1.Image
+	Config     *v1.Image
+	ID         string
+	RootDir    string
+	RunDir     string
+	MountPoint string
+	LayerID    string
 }
 
 // ContainerServer display all related operations
@@ -60,7 +62,7 @@ type ContainerServer interface {
 	// RemoveContainer
 	RemoveContainer(containerID string) error
 	// UmountContainer
-	UmountContainer(containerID string) error
+	UmountContainer(containerID string, force bool) error
 }
 
 func (r *containerLifeService) createContainer(systemContext *types.SystemContext, imageName, imageID, containerName, containerID string, storageOpts map[string]string) (ContainerSpec, error) {
@@ -138,7 +140,11 @@ func (r *containerLifeService) createContainer(systemContext *types.SystemContex
 
 	coptions.Flags = make(map[string]interface{})
 	if storageOpts != nil {
-		coptions.Flags["StorageOpts"] = storageOpts
+		tmpStorageOpts := make(map[string]string)
+		for k, v := range storageOpts {
+			tmpStorageOpts[k] = v
+		}
+		coptions.Flags["StorageOpts"] = tmpStorageOpts
 	}
 
 	container, err := r.imageServer.GetStore().CreateContainer(containerID, names, img.ID, "", string(mdata), coptions)
@@ -176,10 +182,12 @@ func (r *containerLifeService) createContainer(systemContext *types.SystemContex
 	}
 
 	return ContainerSpec{
-		ID:      container.ID,
-		RootDir: containerRootDir,
-		RunDir:  containerRunDir,
-		Config:  imageConfig,
+		ID:         container.ID,
+		RootDir:    containerRootDir,
+		RunDir:     containerRunDir,
+		Config:     imageConfig,
+		MountPoint: container.MountPoint,
+		LayerID:    container.LayerID,
 	}, nil
 }
 
@@ -216,7 +224,7 @@ func (r *containerLifeService) GetContainerLayerID(id string) (string, error) {
 	return container.LayerID, nil
 }
 
-func (r *containerLifeService) UmountContainer(containerID string) error {
+func (r *containerLifeService) UmountContainer(containerID string, force bool) error {
 	if containerID == "" {
 		return ErrContainerID
 	}
@@ -224,7 +232,7 @@ func (r *containerLifeService) UmountContainer(containerID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = r.imageServer.GetStore().Unmount(container.ID, false)
+	_, err = r.imageServer.GetStore().Unmount(container.ID, force)
 	if err != nil {
 		logrus.Debugf("failed to unmount container %q: %v", container.ID, err)
 		return err

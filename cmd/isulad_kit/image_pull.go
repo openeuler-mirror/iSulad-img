@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019-2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
 // iSulad-kit licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -14,17 +14,23 @@
 package main
 
 import (
-	"errors"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"strings"
 
-	"encoding/base64"
 	"github.com/containers/image/copy"
 	"github.com/containers/image/types"
 	"github.com/sirupsen/logrus"
-	"github.com/urfave/cli"
 )
+
+type pullOptions struct {
+	username        string
+	password        string
+	certDir         string
+	tlsVerify       bool
+	useDecryptedKey bool
+}
 
 func decodeAuth(s string) (string, string, error) {
 	decodeStr, err := base64.StdEncoding.DecodeString(s)
@@ -41,44 +47,10 @@ func decodeAuth(s string) (string, string, error) {
 	return username, password, nil
 }
 
-func pullHandler(c *cli.Context) error {
-	if len(c.Args()) != 1 {
-		cli.ShowCommandHelp(c, "pull")
-		return errors.New("Exactly one arguments expected")
-	}
-
-	image := c.Args()[0]
-	logrus.Debugf("Pull Image Request: %+v", image)
-
-	store, err := getStorageStore(true, c)
+func imagePull(gopts *globalOptions, popts *pullOptions, image string) (string, error) {
+	imageService, err := getImageService(gopts)
 	if err != nil {
-		return err
-	}
-
-	ctx, cancel := commandTimeoutContextFromGlobalOptions(c)
-	defer cancel()
-
-	imageService, err := getImageService(ctx, c, store)
-	if err != nil {
-		return err
-	}
-
-	username, password, err := readAuthFromStdin()
-	if err != nil {
-		return err
-	}
-
-	if c.IsSet("creds") {
-		username, password, err = parseCreds(c.String("creds"))
-		if err != nil {
-			return err
-		}
-	}
-	if c.IsSet("auth") {
-		username, password, err = decodeAuth(c.String("auth"))
-		if err != nil {
-			return fmt.Errorf("error decoding authentication for image %s: %v", image, err)
-		}
+		return "", err
 	}
 
 	// print the download report to stderr for debug
@@ -87,107 +59,70 @@ func pullHandler(c *cli.Context) error {
 	}
 
 	options.SourceCtx = &types.SystemContext{
-		DockerCertPath:              c.String("cert-dir"),
-		DockerInsecureSkipTLSVerify: types.NewOptionalBool(!c.BoolT("tls-verify")),
-		UseDecryptedKey:             useDecryptedKey(c, ""),
+		DockerCertPath:              popts.certDir,
+		DockerInsecureSkipTLSVerify: types.NewOptionalBool(!popts.tlsVerify),
+		UseDecryptedKey:             types.NewOptionalBool(popts.useDecryptedKey),
 		AuthFilePath:                defaultAuthFilePath(),
 	}
 
 	// Specifying a username indicates the user intends to send authentication to the registry.
-	if username != "" {
+	if popts.username != "" {
 		options.SourceCtx.DockerAuthConfig = &types.DockerAuthConfig{
-			Username: username,
-			Password: password,
+			Username: popts.username,
+			Password: popts.password,
 		}
 	}
 
 	var (
-		images []string
 		pulled string
 	)
-	images, err = imageService.ParseImageNames(image)
+	images, err := imageService.ParseImageNames(image)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	for _, img := range images {
+	dstImage := image
+	for _, srcImage := range images {
 		var tmpImg types.Image
-		tmpImg, err = imageService.InitImage(img, options)
+		tmpImg, err = imageService.InitImage(srcImage, options)
 		if err != nil {
-			logrus.Debugf("error preparing image %s: %v", img, err)
+			logrus.Debugf("error preparing image %s: %v", srcImage.name, err)
 			continue
 		}
 
 		var storedImage *ImageBasicSpec
-		storedImage, err = imageService.GetOneImage(&types.SystemContext{}, img)
+		storedImage, err = imageService.GetOneImage(&types.SystemContext{}, dstImage)
 		if err == nil {
 			tmpImgConfigDigest := tmpImg.ConfigInfo().Digest
 			if tmpImgConfigDigest.String() == "" {
 				logrus.Debugf("image config digest is empty, re-pulling image")
 			} else if tmpImgConfigDigest.String() == storedImage.ConfigDigest.String() {
-				logrus.Debugf("image %s already in store, skipping pull", img)
-				pulled = img
+				logrus.Debugf("image %s already in store, skipping pull", dstImage)
+				pulled = dstImage
 				break
 			}
-			logrus.Debugf("image in store has different ID, re-pulling %s", img)
+			logrus.Debugf("image in store has different ID, re-pulling %s", dstImage)
 		}
 
-		_, err = imageService.PullImage(&types.SystemContext{}, img, options)
+		_, err = imageService.PullImage(&types.SystemContext{}, srcImage, dstImage, options)
 		if err != nil {
-			logrus.Debugf("error pulling image %s: %v", img, err)
+			logrus.Debugf("error pulling image %s: %v", srcImage.name, err)
 			continue
 		}
-		pulled = img
+		pulled = dstImage
 		break
 	}
 	if pulled == "" && err != nil {
-		return err
+		return "", err
 	}
 	status, err := imageService.GetOneImage(&types.SystemContext{}, pulled)
 	if err != nil {
-		return err
+		return "", err
 	}
 	imageRef := status.ID
 	if len(status.RepoDigests) > 0 {
 		imageRef = status.RepoDigests[0]
 	}
 	fmt.Print(imageRef)
-	return nil
-}
-
-var pullCmd = cli.Command{
-	Name:  "pull",
-	Usage: "isulad_kit pull [OPTIONS] NAME[:TAG|@DIGEST]",
-	Description: fmt.Sprintf(`
-
-	Pull an image or a repository from a registry.
-	`),
-	ArgsUsage: "NAME[:TAG|@DIGEST]",
-	Action:    pullHandler,
-	// FIXME: Do we need to namespace the GPG aspect?
-	Flags: []cli.Flag{
-		cli.StringFlag{
-			Name:  "creds",
-			Value: "",
-			Usage: "Use `USERNAME[:PASSWORD]` for accessing the source registry",
-		},
-		cli.StringFlag{
-			Name:  "auth",
-			Value: "",
-			Usage: "Use `auth config` for accessing the source registry",
-		},
-		cli.StringFlag{
-			Name:  "cert-dir",
-			Value: "",
-			Usage: "use certificates at `PATH` (*.crt, *.cert, *.key) to connect to the source registry or daemon",
-		},
-		cli.BoolTFlag{
-			Name:  "tls-verify",
-			Usage: "require HTTPS and verify certificates when talking to the container source registry or daemon (defaults to true)",
-		},
-		cli.BoolTFlag{
-			Name:  "use-decrypted-key",
-			Usage: "Use decrypted private key by default (defaults to true)",
-		},
-	},
+	return imageRef, nil
 }

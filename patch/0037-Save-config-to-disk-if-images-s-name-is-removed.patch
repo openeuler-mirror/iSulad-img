@@ -1,0 +1,27 @@
+From bb19e84131191c92b332acf8e26957b51ba2d530 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Wed, 18 Dec 2019 07:29:06 -0500
+Subject: [PATCH 37/37] Save config to disk if images's name is removed
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ vendor/github.com/containers/storage/images.go | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/vendor/github.com/containers/storage/images.go b/vendor/github.com/containers/storage/images.go
+index 0a5a953..f5c49a5 100644
+--- a/vendor/github.com/containers/storage/images.go
++++ b/vendor/github.com/containers/storage/images.go
+@@ -677,6 +677,9 @@ func (r *imageStore) AddName(id string, name string) error {
+ 		for _, name := range names {
+ 			if otherImage, ok := r.byname[name]; ok {
+ 				r.removeName(otherImage, name)
++				if err := r.SaveImage(otherImage); err != nil {
++					return err
++				}
+ 			}
+ 			r.byname[name] = image
+ 		}
+-- 
+2.19.1
+
