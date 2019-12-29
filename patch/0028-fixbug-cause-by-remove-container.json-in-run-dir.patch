@@ -1,7 +1,7 @@
-From 429ea92090cea1951fb19081feebf62f48b16400 Mon Sep 17 00:00:00 2001
+From ef7ac4ba83e948393e21b9729158c28596097052 Mon Sep 17 00:00:00 2001
 From: LiuHao <liuhao27@huawei.com>
 Date: Fri, 9 Aug 2019 17:07:33 +0800
-Subject: [PATCH 30/37] fixbug: cause by remove container.json in run dir
+Subject: [PATCH 28/33] fixbug: cause by remove container.json in run dir
 
 Start container will load container.json in run dir.
 If it is not exist, start container will failed.

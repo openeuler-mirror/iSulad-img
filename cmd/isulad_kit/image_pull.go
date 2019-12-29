@@ -25,11 +25,10 @@ import (
 )
 
 type pullOptions struct {
-	username        string
-	password        string
-	certDir         string
-	tlsVerify       bool
-	useDecryptedKey bool
+	username  string
+	password  string
+	certDir   string
+	tlsVerify bool
 }
 
 func decodeAuth(s string) (string, string, error) {
@@ -61,7 +60,6 @@ func imagePull(gopts *globalOptions, popts *pullOptions, image string) (string, 
 	options.SourceCtx = &types.SystemContext{
 		DockerCertPath:              popts.certDir,
 		DockerInsecureSkipTLSVerify: types.NewOptionalBool(!popts.tlsVerify),
-		UseDecryptedKey:             types.NewOptionalBool(popts.useDecryptedKey),
 		AuthFilePath:                defaultAuthFilePath(),
 	}
 

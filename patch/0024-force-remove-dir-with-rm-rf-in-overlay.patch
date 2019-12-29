@@ -1,7 +1,7 @@
-From e2b184674529e9451e561685d50c670af0fc541f Mon Sep 17 00:00:00 2001
+From a97a35708f385a63275443141e4e9c88ace63ade Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Thu, 18 Jul 2019 06:20:49 -0400
-Subject: [PATCH 26/37] force remove dir with rm -rf in overlay
+Subject: [PATCH 24/33] force remove dir with rm -rf in overlay
 
 Signed-off-by: LiFeng <lifeng68@huawei.com>
 ---
