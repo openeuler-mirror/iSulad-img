@@ -45,7 +45,6 @@ type globalOptions struct {
 	InsecurePolicy     bool
 	CmdTimeout         time.Duration
 	TLSVerify          bool
-	UseDecryptedKey    bool
 
 	Daemon bool
 }
@@ -61,15 +60,6 @@ const maxJSONFileSize = (10 * 1024 * 1024)
 
 func defaultAuthFilePath() string {
 	return filepath.Join(homedir.Get(), ".isulad/auths.json")
-}
-
-func useDecryptedKey(c *cli.Context, flagPrefix string) bool {
-	if c.IsSet(flagPrefix + "use-decrypted-key") {
-		return c.BoolT(flagPrefix + "use-decrypted-key")
-	}
-
-	// If not set, default true.
-	return true
 }
 
 func tlsVerify(c *cli.Context, flagPrefix string) bool {
@@ -95,7 +85,6 @@ func contextFromGlobalOptions(c *cli.Context, flagPrefix string) (*types.SystemC
 		DockerDaemonHost:                  c.String(flagPrefix + "daemon-host"),
 		DockerDaemonCertPath:              c.String(flagPrefix + "cert-dir"),
 		DockerDaemonInsecureSkipTLSVerify: !c.BoolT(flagPrefix + "tls-verify"),
-		UseDecryptedKey:                   types.NewOptionalBool(useDecryptedKey(c, flagPrefix)),
 	}
 	if c.IsSet(flagPrefix + "creds") {
 		var err error
@@ -311,6 +300,5 @@ func getGlobalOptions(c *cli.Context) (*globalOptions, error) {
 		InsecurePolicy:     c.GlobalBool("insecure-policy"),
 		CmdTimeout:         c.GlobalDuration("command-timeout"),
 		TLSVerify:          tlsVerify(c, ""),
-		UseDecryptedKey:    useDecryptedKey(c, ""),
 	}, nil
 }

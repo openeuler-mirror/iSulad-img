@@ -359,7 +359,6 @@ func (s *grpcImageService) PullImage(ctx context.Context, req *pb.PullImageReque
 	}
 
 	popts.tlsVerify = s.gopts.TLSVerify
-	popts.useDecryptedKey = s.gopts.UseDecryptedKey
 
 	imageRef, err := imagePull(s.gopts, popts, req.Image.Image)
 
@@ -658,7 +657,6 @@ func (s *grpcImageService) Login(ctx context.Context, req *pb.LoginRequest) (*pb
 	sys := &types.SystemContext{
 		DockerInsecureSkipTLSVerify:       types.NewOptionalBool(!s.gopts.TLSVerify),
 		DockerDaemonInsecureSkipTLSVerify: !s.gopts.TLSVerify,
-		UseDecryptedKey:                   types.NewOptionalBool(s.gopts.UseDecryptedKey),
 		AuthFilePath:                      defaultAuthFilePath(),
 	}
 
@@ -686,7 +684,6 @@ func (s *grpcImageService) Logout(ctx context.Context, req *pb.LogoutRequest) (*
 	sys := &types.SystemContext{
 		DockerInsecureSkipTLSVerify:       types.NewOptionalBool(!s.gopts.TLSVerify),
 		DockerDaemonInsecureSkipTLSVerify: !s.gopts.TLSVerify,
-		UseDecryptedKey:                   types.NewOptionalBool(s.gopts.UseDecryptedKey),
 		AuthFilePath:                      defaultAuthFilePath(),
 	}
 

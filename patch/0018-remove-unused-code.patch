@@ -1,7 +1,7 @@
-From 3f012d3947566cb927bb038a474e7183d2172563 Mon Sep 17 00:00:00 2001
+From 2bebeff68f9149eea92def7156ed8a0811cbb711 Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Mon, 20 May 2019 10:45:55 -0400
-Subject: [PATCH 19/37] remove unused code
+Subject: [PATCH 18/33] remove unused code
 
 Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
 ---

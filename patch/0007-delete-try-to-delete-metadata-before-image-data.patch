@@ -1,7 +1,7 @@
-From 939bc7649ade3ca4417a0904eaba2f22013b70ca Mon Sep 17 00:00:00 2001
+From 87e6994f72deafada44df64a965e0f76399cff9b Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Thu, 18 Apr 2019 05:04:18 -0400
-Subject: [PATCH 07/37] delete: try to delete metadata before image data
+Subject: [PATCH 07/33] delete: try to delete metadata before image data
 
 Signed-off-by: LiFeng <lifeng68@huawei.com>
 ---
