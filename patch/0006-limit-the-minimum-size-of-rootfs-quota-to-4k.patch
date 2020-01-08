@@ -1,7 +1,7 @@
-From a57bb0e5a667d9cdf4cecc246dcd569e19c868d0 Mon Sep 17 00:00:00 2001
+From 3310327abda1ba028ec2f2baa8824f569bdc2d15 Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Tue, 16 Apr 2019 10:53:52 -0400
-Subject: [PATCH 06/34] limit the minimum size of rootfs quota to 4k
+Subject: [PATCH 06/35] limit the minimum size of rootfs quota to 4k
 
 Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
 ---

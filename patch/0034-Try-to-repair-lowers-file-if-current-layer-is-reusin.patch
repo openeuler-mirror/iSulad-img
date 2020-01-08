@@ -1,7 +1,7 @@
-From f021955bd25c9f40da350b86ce882d9e33fd07e5 Mon Sep 17 00:00:00 2001
+From 6ec12bc7862f26c89b3d3799aef5303d1b75cb92 Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Mon, 30 Dec 2019 10:20:56 +0800
-Subject: [PATCH 34/34] Try to repair lowers file if current layer is reusing
+Subject: [PATCH 34/35] Try to repair lowers file if current layer is reusing
 
 Signed-off-by: WangFengTu <wangfengtu@huawei.com>
 ---
