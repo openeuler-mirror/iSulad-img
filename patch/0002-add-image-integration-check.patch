@@ -1,7 +1,7 @@
-From 17f8d29c68abf2c5a0e6e29df8572db3623085f7 Mon Sep 17 00:00:00 2001
+From a6bb611b5182010ec90fa9e2876b4dae26f24f3d Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Thu, 4 Apr 2019 11:03:15 -0400
-Subject: [PATCH 02/33] add image integration check
+Subject: [PATCH 02/34] add image integration check
 
 Signed-off-by: LiFeng <lifeng68@huawei.com>
 ---

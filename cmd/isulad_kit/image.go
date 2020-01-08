@@ -123,7 +123,7 @@ type ImageServer interface {
 	// PullImage pull an image
 	PullImage(systemContext *types.SystemContext, image parsedImageNames, dstImage string, options *copy.Options) (types.ImageReference, error)
 	// CheckImages
-	CheckImages(systemContext *types.SystemContext) error
+	IntegrationCheck(systemContext *types.SystemContext) error
 	// GetAllImages returns all images matches the filter
 	GetAllImages(systemContext *types.SystemContext, filter string) ([]ImageBasicSpec, error)
 	// GetOneImage returns an image matches the filter
@@ -180,7 +180,7 @@ func (svc *imageService) PullImage(systemContext *types.SystemContext, image par
 	return destRef, nil
 }
 
-func (svc *imageService) CheckImages(systemContext *types.SystemContext) error {
+func (svc *imageService) IntegrationCheck(systemContext *types.SystemContext) error {
 	svc.store.GetCheckedLayers()
 	defer svc.store.CleanupCheckedLayers()
 
@@ -203,6 +203,29 @@ func (svc *imageService) CheckImages(systemContext *types.SystemContext) error {
 			}
 		}
 	}
+
+	// Any container must based on an image now
+	containers, err := svc.store.Containers()
+	if err != nil {
+		return err
+	}
+	for _, container := range containers {
+		logrus.Debugf("Try to check container %s", container.ID)
+		if !svc.store.Exists(container.ImageID) {
+			logrus.Errorf("Delete container %s due to no related image found", container.ID)
+			err = svc.store.DeleteContainer(container.ID)
+			if err != nil {
+				logrus.Errorf("Failed to delete container %s with err: %s", container.ID, err)
+			}
+		}
+	}
+
+	// Delete layers with no image related
+	err = svc.store.DeleteUncheckedLayers()
+	if err != nil {
+		logrus.Errorf("Failed to delete unchecked layers: %v", err)
+	}
+
 	return nil
 }
 

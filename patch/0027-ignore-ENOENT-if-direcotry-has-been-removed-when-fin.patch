@@ -1,7 +1,7 @@
-From bc90841e43a761f6e70576d3523852f0ad38c05e Mon Sep 17 00:00:00 2001
+From 3b91be2338de3af671da0208b99713ad0837085c Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Fri, 9 Aug 2019 04:56:23 -0400
-Subject: [PATCH 27/33] ignore ENOENT if direcotry has been removed when find
+Subject: [PATCH 27/34] ignore ENOENT if direcotry has been removed when find
  next project id
 
 Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>

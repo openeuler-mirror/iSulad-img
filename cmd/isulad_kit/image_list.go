@@ -83,7 +83,7 @@ func listImages(gopts *globalOptions, filter string, check bool) (*listImagesRes
 	}
 
 	if check {
-		err = imageService.CheckImages(&types.SystemContext{})
+		err = imageService.IntegrationCheck(&types.SystemContext{})
 		if err != nil {
 			return nil, err
 		}
