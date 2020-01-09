@@ -54,11 +54,12 @@ func getTagFromArchive(tar *tarfile.Source) ([]string, error) {
 		return nil, err
 	}
 
-	if len(manifest) == 0 || len(manifest[0].RepoTags) == 0 {
+	allTags := allRepoTags(manifest)
+	if len(allTags) == 0 {
 		return nil, errors.New("No tag found in archive")
 	}
 
-	return allRepoTags(manifest), nil
+	return allTags, nil
 }
 
 func loadImage(gopts *globalOptions, lopts *loadOptions) (string, error) {
