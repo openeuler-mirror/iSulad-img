@@ -1,0 +1,192 @@
+From 6ec12bc7862f26c89b3d3799aef5303d1b75cb92 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Mon, 30 Dec 2019 10:20:56 +0800
+Subject: [PATCH 34/35] Try to repair lowers file if current layer is reusing
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../containers/image/storage/storage_image.go |  7 ++++
+ .../containers/storage/drivers/driver.go      |  4 +++
+ .../storage/drivers/overlay/overlay.go        | 29 +++++++++++++++-
+ .../github.com/containers/storage/layers.go   | 11 ++++++
+ vendor/github.com/containers/storage/store.go | 34 +++++++++++++++++++
+ 5 files changed, 84 insertions(+), 1 deletion(-)
+
+diff --git a/vendor/github.com/containers/image/storage/storage_image.go b/vendor/github.com/containers/image/storage/storage_image.go
+index 257ff6e..9d8366c 100644
+--- a/vendor/github.com/containers/image/storage/storage_image.go
++++ b/vendor/github.com/containers/image/storage/storage_image.go
+@@ -593,6 +593,13 @@ func (s *storageImageDestination) Commit(ctx context.Context) error {
+ 			id = digest.Canonical.FromBytes([]byte(lastLayer + "+" + diffID.Hex())).Hex()
+ 		}
+ 		if layer, err2 := s.imageRef.transport.store.Layer(id); layer != nil && err2 == nil {
++			// If layer is reused, layer's lowers file may point to invalid link because
++			// parent layer's link changed when it is repulled or reloaded.
++			err := s.imageRef.transport.store.TryRepairLayerLowers(layer.ID, lastLayer)
++			if err != nil {
++				logrus.Errorf("Try to repair layer's lowers file failed: %v", err)
++			}
++
+ 			// There's already a layer that should have the right contents, just reuse it.
+ 			lastLayer = layer.ID
+ 			continue
+diff --git a/vendor/github.com/containers/storage/drivers/driver.go b/vendor/github.com/containers/storage/drivers/driver.go
+index 476b551..cd061bd 100644
+--- a/vendor/github.com/containers/storage/drivers/driver.go
++++ b/vendor/github.com/containers/storage/drivers/driver.go
+@@ -182,6 +182,10 @@ type Checker interface {
+ 	IsMounted(path string) bool
+ }
+ 
++type LowersRepair interface {
++	TryRepairLowers(id, parent string) error
++}
++
+ func init() {
+ 	drivers = make(map[string]InitFunc)
+ }
+diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+index dfac1f0..213acd1 100644
+--- a/vendor/github.com/containers/storage/drivers/overlay/overlay.go
++++ b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+@@ -15,6 +15,7 @@ import (
+ 	"strings"
+ 	"sync"
+ 
++	"bufio"
+ 	"github.com/containers/storage/drivers"
+ 	"github.com/containers/storage/drivers/overlayutils"
+ 	"github.com/containers/storage/drivers/quota"
+@@ -34,7 +35,6 @@ import (
+ 	"github.com/pkg/errors"
+ 	"github.com/sirupsen/logrus"
+ 	"golang.org/x/sys/unix"
+-	"bufio"
+ )
+ 
+ var (
+@@ -1108,6 +1108,33 @@ func (d *Driver) SupportsShifting() bool {
+ 	return d.options.mountProgram != ""
+ }
+ 
++func (d *Driver) TryRepairLowers(id, parent string) error {
++	// Find if lowers need repair
++	lowersStr, err := ioutil.ReadFile(path.Join(d.dir(id), lowerFile))
++	if err != nil && !os.IsNotExist(err) {
++		return err
++	}
++
++	lowers := strings.Split(string(lowersStr), ":")
++	if len(lowers) != 0 {
++		if _, err := os.Stat(path.Join(d.home, lowers[0])); err == nil {
++			return nil
++		}
++	}
++
++	// Try repair lowers
++	lower, err := d.getLower(parent)
++	if err != nil {
++		return err
++	}
++	if lower != "" {
++		if err := ioutil.WriteFile(path.Join(d.dir(id), lowerFile), []byte(lower), 0666); err != nil {
++			return err
++		}
++	}
++	return nil
++}
++
+ // dumbJoin is more or less a dumber version of filepath.Join, but one which
+ // won't Clean() the path, allowing us to append ".." as a component and trust
+ // pathname resolution to do some non-obvious work.
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index cf6dd10..b03de66 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -226,6 +226,8 @@ type LayerStore interface {
+ 
+ 	LoadLayerMountPoint(layer *Layer) error
+ 
++	TryRepairLowers(id, parent string) error
++
+ 	// ParentOwners returns the UIDs and GIDs of parents of the layer's mountpoint
+ 	// for which the layer's UID and GID maps don't contain corresponding entries.
+ 	ParentOwners(id string) (uids, gids []int, err error)
+@@ -585,6 +587,15 @@ func (r *layerStore) LoadLayerMountPoint(layer *Layer) error {
+ 	return nil
+ }
+ 
++func (r *layerStore) TryRepairLowers(id, parent string) error {
++	repair, ok := r.driver.(drivers.LowersRepair)
++	if !ok {
++		return nil
++	}
++
++	return repair.TryRepairLowers(id, parent)
++}
++
+ func (r *layerStore) Save() error {
+ 	if !r.IsReadWrite() {
+ 		return errors.Wrapf(ErrStoreIsReadOnly, "not allowed to modify the layer store at %q", r.layerspath())
+diff --git a/vendor/github.com/containers/storage/store.go b/vendor/github.com/containers/storage/store.go
+index b327274..f346dc9 100644
+--- a/vendor/github.com/containers/storage/store.go
++++ b/vendor/github.com/containers/storage/store.go
+@@ -414,6 +414,10 @@ type Store interface {
+ 
+ 	CleanupCheckedLayers()
+ 
++	DeleteUncheckedLayers() error
++
++	TryRepairLayerLowers(id, parent string) error
++
+ 	// ImagesByDigest returns a list of images which contain a big data item
+ 	// named ImageDigestBigDataKey whose contents have the specified digest.
+ 	ImagesByDigest(d digest.Digest) ([]*Image, error)
+@@ -2189,6 +2193,24 @@ func (s *store) GetCheckedLayers() {
+ 	return
+ }
+ 
++func (s *store) DeleteUncheckedLayers() error {
++	layers, err := s.Layers()
++	if err != nil {
++		return err
++	}
++
++	for _, l := range layers {
++		if s.checkedLayers[l.ID] {
++			continue
++		}
++		logrus.Errorf("Delete unchecked layer %v due to no related image", l.ID)
++		if err := s.DeleteLayer(l.ID); err != nil {
++			logrus.Errorf("Failed to delete unchecked layer %v: %v", l.ID, err)
++		}
++	}
++	return nil
++}
++
+ func (s *store) addCheckedLayer(id string) error {
+ 	s.checkedLayers[id] = true
+ 
+@@ -2275,6 +2297,18 @@ func (s *store) DeleteContainersByImage(id string) error {
+ 	return nil
+ }
+ 
++func (s *store) TryRepairLayerLowers(id, parent string) error {
++	rlstore, err := s.LayerStore()
++	if err != nil {
++		return err
++	}
++
++	rlstore.Lock()
++	defer rlstore.Unlock()
++
++	return rlstore.TryRepairLowers(id, parent)
++}
++
+ func (s *store) CheckImage(id string) error {
+ 	rlstore, err := s.LayerStore()
+ 	if err != nil {
+-- 
+2.19.1
+

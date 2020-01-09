@@ -19,6 +19,7 @@ import (
 	"os"
 
 	"github.com/containers/storage/pkg/archive"
+	"github.com/containers/storage/pkg/chrootarchive"
 	"github.com/containers/storage/pkg/idtools"
 	"github.com/containers/storage/pkg/ioutils"
 )
@@ -60,7 +61,7 @@ func exportRootfs(gopts *globalOptions, eopts *exportOptions, idOrName string) e
 		return fmt.Errorf("offset must be greater than 0, got %v", offset)
 	}
 
-	archive, err := archive.TarWithOptions(mountPoint, &archive.TarOptions{
+	archive, err := chrootarchive.Tar(mountPoint, &archive.TarOptions{
 		Compression: archive.Uncompressed,
 		UIDMaps: []idtools.IDMap{
 			{
@@ -76,8 +77,7 @@ func exportRootfs(gopts *globalOptions, eopts *exportOptions, idOrName string) e
 				Size:        offset,
 			},
 		},
-	},
-	)
+	}, mountPoint)
 	if err != nil {
 		return err
 	}

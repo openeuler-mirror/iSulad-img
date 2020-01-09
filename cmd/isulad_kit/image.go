@@ -47,10 +47,6 @@ var (
 	ErrParseImageID = errors.New("cannot parse an image ID")
 	// ErrRegistriesConfigure no registries configured
 	ErrRegistriesConfigure = errors.New(`registries configured error`)
-
-	forceSecureIgnore        = 0
-	forceSecureTLSVerify     = 1
-	forceSecureSkipTLSVerify = 2
 )
 
 // HealthConfig means healtch check config in image
@@ -111,8 +107,8 @@ type imageService struct {
 }
 
 type parsedImageNames struct {
-	name        string
-	forceSecure int
+	name                string
+	secureSkipTLSVerify bool
 }
 
 // sizer knows its size.
@@ -127,7 +123,7 @@ type ImageServer interface {
 	// PullImage pull an image
 	PullImage(systemContext *types.SystemContext, image parsedImageNames, dstImage string, options *copy.Options) (types.ImageReference, error)
 	// CheckImages
-	CheckImages(systemContext *types.SystemContext) error
+	IntegrationCheck(systemContext *types.SystemContext) error
 	// GetAllImages returns all images matches the filter
 	GetAllImages(systemContext *types.SystemContext, filter string) ([]ImageBasicSpec, error)
 	// GetOneImage returns an image matches the filter
@@ -143,7 +139,7 @@ type ImageServer interface {
 }
 
 func (svc *imageService) InitImage(image parsedImageNames, options *copy.Options) (types.Image, error) {
-	srcRef, err := svc.initReference(image.name, image.forceSecure, options)
+	srcRef, err := svc.initReference(image.name, image.secureSkipTLSVerify, options)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +164,7 @@ func (svc *imageService) PullImage(systemContext *types.SystemContext, image par
 		options = &copy.Options{}
 	}
 
-	srcRef, err := svc.initReference(image.name, image.forceSecure, options)
+	srcRef, err := svc.initReference(image.name, image.secureSkipTLSVerify, options)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +180,7 @@ func (svc *imageService) PullImage(systemContext *types.SystemContext, image par
 	return destRef, nil
 }
 
-func (svc *imageService) CheckImages(systemContext *types.SystemContext) error {
+func (svc *imageService) IntegrationCheck(systemContext *types.SystemContext) error {
 	svc.store.GetCheckedLayers()
 	defer svc.store.CleanupCheckedLayers()
 
@@ -207,6 +203,29 @@ func (svc *imageService) CheckImages(systemContext *types.SystemContext) error {
 			}
 		}
 	}
+
+	// Any container must based on an image now
+	containers, err := svc.store.Containers()
+	if err != nil {
+		return err
+	}
+	for _, container := range containers {
+		logrus.Debugf("Try to check container %s", container.ID)
+		if !svc.store.Exists(container.ImageID) {
+			logrus.Errorf("Delete container %s due to no related image found", container.ID)
+			err = svc.store.DeleteContainer(container.ID)
+			if err != nil {
+				logrus.Errorf("Failed to delete container %s with err: %s", container.ID, err)
+			}
+		}
+	}
+
+	// Delete layers with no image related
+	err = svc.store.DeleteUncheckedLayers()
+	if err != nil {
+		logrus.Errorf("Failed to delete unchecked layers: %v", err)
+	}
+
 	return nil
 }
 
@@ -278,7 +297,7 @@ func (svc *imageService) UnrefImage(systemContext *types.SystemContext, imageNam
 	}
 
 	if !strings.HasPrefix(img.ID, imageName) {
-		namedRef, err := svc.initReference(imageName, forceSecureIgnore, &copy.Options{})
+		namedRef, err := svc.initReference(imageName, false, &copy.Options{})
 		if err != nil {
 			return err
 		}
@@ -329,7 +348,7 @@ func (svc *imageService) IsSecureIndex(indexName string) bool {
 func (svc *imageService) ParseImageNames(imageName string) ([]parsedImageNames, error) {
 	if len(imageName) >= minIDLength && svc.store != nil {
 		if img, err := svc.store.Image(imageName); err == nil && img != nil && strings.HasPrefix(img.ID, imageName) {
-			return []parsedImageNames{{img.ID, forceSecureIgnore}}, nil
+			return []parsedImageNames{{img.ID, false}}, nil
 		}
 	}
 	named, err := reference.ParseNormalizedNamed(imageName)
@@ -341,7 +360,7 @@ func (svc *imageService) ParseImageNames(imageName string) ([]parsedImageNames, 
 	}
 	domain, _ := parseDockerDomain(imageName)
 	if domain != "" {
-		return []parsedImageNames{{imageName, forceSecureIgnore}}, nil
+		return []parsedImageNames{{imageName, false}}, nil
 	}
 	if len(svc.registries) == 0 {
 		return nil, fmt.Errorf("image %v has no domain and no registry-mirror found", imageName)
@@ -349,12 +368,8 @@ func (svc *imageService) ParseImageNames(imageName string) ([]parsedImageNames, 
 	var images []parsedImageNames
 	for _, r := range svc.registries {
 		var image parsedImageNames
-		if strings.HasPrefix(r, "https://") {
-			image.forceSecure = forceSecureTLSVerify
-		} else if strings.HasPrefix(r, "http://") {
-			image.forceSecure = forceSecureSkipTLSVerify
-		} else {
-			image.forceSecure = forceSecureIgnore
+		if strings.HasPrefix(r, "http://") {
+			image.secureSkipTLSVerify = true
 		}
 		r = strings.TrimPrefix(strings.TrimPrefix(r, "https://"), "http://")
 		tagged, ok := reference.TagNameOnly(named).(reference.Tagged)
@@ -575,7 +590,7 @@ func getImageDigest(ctx context.Context, image types.ImageSource, instanceDigest
 }
 
 // initReference init an image reference
-func (svc *imageService) initReference(imageName string, forceSecure int, options *copy.Options) (types.ImageReference, error) {
+func (svc *imageService) initReference(imageName string, secureSkipTLSVerify bool, options *copy.Options) (types.ImageReference, error) {
 	if imageName == "" {
 		return nil, storage.ErrNotAnImage
 	}
@@ -596,9 +611,7 @@ func (svc *imageService) initReference(imageName string, forceSecure int, option
 		options.SourceCtx = &types.SystemContext{}
 	}
 
-	if forceSecure == forceSecureTLSVerify {
-		options.SourceCtx.DockerInsecureSkipTLSVerify = types.NewOptionalBool(false)
-	} else if forceSecure == forceSecureSkipTLSVerify {
+	if secureSkipTLSVerify {
 		options.SourceCtx.DockerInsecureSkipTLSVerify = types.NewOptionalBool(true)
 	} else {
 		if srcRef.DockerReference() != nil {

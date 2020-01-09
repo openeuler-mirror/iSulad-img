@@ -1,7 +1,7 @@
-From 6345b249449998e94e72f3687f010e487f4001ed Mon Sep 17 00:00:00 2001
+From 157dc1991ec11ea31880493da58af32840e6515f Mon Sep 17 00:00:00 2001
 From: LiuHao <liuhao27@huawei.com>
 Date: Thu, 5 Dec 2019 10:13:52 +0800
-Subject: [PATCH 32/33] log message of get mountpoint failed
+Subject: [PATCH 32/35] log message of get mountpoint failed
 
 Signed-off-by: LiuHao <liuhao27@huawei.com>
 ---
