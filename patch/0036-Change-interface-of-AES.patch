@@ -1,0 +1,110 @@
+From c65d63c0c34d1b4fb60f7b481829560a9913b0d5 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Fri, 17 Jan 2020 02:50:13 -0500
+Subject: [PATCH 36/36] Change interface of AES
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../containers/image/pkg/docker/aes/aes.go    | 22 ++++++-------------
+ .../image/pkg/docker/config/config.go         |  8 +++----
+ 2 files changed, 11 insertions(+), 19 deletions(-)
+
+diff --git a/vendor/github.com/containers/image/pkg/docker/aes/aes.go b/vendor/github.com/containers/image/pkg/docker/aes/aes.go
+index 5e55501..9eda48e 100644
+--- a/vendor/github.com/containers/image/pkg/docker/aes/aes.go
++++ b/vendor/github.com/containers/image/pkg/docker/aes/aes.go
+@@ -23,7 +23,7 @@ import (
+ 	"path/filepath"
+ )
+ 
+-var KEY_AES []byte
++var aesKey []byte
+ 
+ const (
+ 	// Use AES-256
+@@ -42,7 +42,7 @@ func genRandData(size int) ([]byte, error) {
+ }
+ 
+ // Init aes key, create key file if not exist
+-func InitAESKey(dir string) error {
++func Init(dir string) error {
+ 	var filename string
+ 	var key []byte
+ 
+@@ -72,18 +72,14 @@ func InitAESKey(dir string) error {
+ 		return err
+ 	}
+ 
+-	KEY_AES = key
++	aesKey = key
+ 
+ 	return nil
+ }
+ 
+ // Encrypt data using CFB mode to be compatiable with docker
+-func AESEncrypt(plainText, key []byte) ([]byte, error) {
+-	if len(key) != keyLen {
+-		return nil, fmt.Errorf("Invalid aes key length %v, it must be %v", len(key), keyLen)
+-	}
+-
+-	block, err := aes.NewCipher(key)
++func Encrypt(plainText []byte) ([]byte, error) {
++	block, err := aes.NewCipher(aesKey)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("Encrypt data failed: %v", err)
+ 	}
+@@ -100,12 +96,8 @@ func AESEncrypt(plainText, key []byte) ([]byte, error) {
+ }
+ 
+ // Decrypt data
+-func AESDecrypt(secretText, key []byte) ([]byte, error) {
+-	if len(key) != keyLen {
+-		return nil, fmt.Errorf("Invalid aes key length %v, it must be %v", len(key), keyLen)
+-	}
+-
+-	block, err := aes.NewCipher(key)
++func Decrypt(secretText []byte) ([]byte, error) {
++	block, err := aes.NewCipher(aesKey)
+ 	if err != nil {
+ 		return nil, fmt.Errorf("Decrypt data failed: %v", err)
+ 	}
+diff --git a/vendor/github.com/containers/image/pkg/docker/config/config.go b/vendor/github.com/containers/image/pkg/docker/config/config.go
+index 1e84086..5f73556 100644
+--- a/vendor/github.com/containers/image/pkg/docker/config/config.go
++++ b/vendor/github.com/containers/image/pkg/docker/config/config.go
+@@ -164,7 +164,7 @@ func getPathToAuth(sys *types.SystemContext) (string, error) {
+ }
+ 
+ func decryptAuths(dir string, auths *dockerConfigFile) error {
+-	if err := aes.InitAESKey(dir); err != nil {
++	if err := aes.Init(dir); err != nil {
+ 		return err
+ 	}
+ 
+@@ -174,7 +174,7 @@ func decryptAuths(dir string, auths *dockerConfigFile) error {
+ 			return err
+ 		}
+ 
+-		auth, err := aes.AESDecrypt([]byte(data), aes.KEY_AES)
++		auth, err := aes.Decrypt([]byte(data))
+ 		if err != nil {
+ 			return err
+ 		}
+@@ -231,12 +231,12 @@ func readJSONFile(path string, legacyFormat bool) (dockerConfigFile, error) {
+ }
+ 
+ func encryptAuths(dir string, auths *dockerConfigFile) error {
+-	if err := aes.InitAESKey(dir); err != nil {
++	if err := aes.Init(dir); err != nil {
+ 		return err
+ 	}
+ 
+ 	for registry, authconfig := range auths.AuthConfigs {
+-		auth, err := aes.AESEncrypt([]byte(authconfig.Auth), aes.KEY_AES)
++		auth, err := aes.Encrypt([]byte(authconfig.Auth))
+ 		if err != nil {
+ 			return err
+ 		}
+-- 
+2.19.1
+
