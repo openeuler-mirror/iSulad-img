@@ -1,6 +1,6 @@
 #######################################################################
 ##- @Copyright (C) Huawei Technologies., Ltd. 2019. All rights reserved.
-# - iSulad-kit licensed under the Mulan PSL v1.
+# - iSulad-img licensed under the Mulan PSL v1.
 # - You can use this software according to the terms and conditions of the Mulan PSL v1.
 # - You may obtain a copy of Mulan PSL v1 at:
 # -     http://license.coscl.org.cn/MulanPSL
@@ -17,8 +17,8 @@
 # usage
 # ./update-version.bash
 topDir=$(git rev-parse --show-toplevel)
-specfile="${topDir}/iSulad-kit.spec"
-versionfile="${topDir}/cmd/isulad_kit/version.go"
+specfile="${topDir}/iSulad-img.spec"
+versionfile="${topDir}/cmd/isulad_img/version.go"
 old_version=$(cat ${specfile} | grep "%global" | grep "_version" | awk  {'print $3'})
 first_old_version=$(cat ${specfile} | grep "%global" | grep "_version" | awk  {'print $3'} | awk -F "." {'print $1'})
 second_old_version=$(cat ${specfile} | grep "%global" | grep "_version" | awk  {'print $3'} | awk -F "." {'print $2'})

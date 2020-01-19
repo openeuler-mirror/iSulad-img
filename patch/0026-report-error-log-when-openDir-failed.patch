@@ -1,7 +1,7 @@
-From 523e6a902a1e2dae947421370e40cfac5725934f Mon Sep 17 00:00:00 2001
+From 9ff222891b089bc344168f24ed77bbe25c35186b Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Fri, 26 Jul 2019 05:02:55 -0400
-Subject: [PATCH 26/37] report error log when openDir failed
+Subject: [PATCH 26/38] report error log when openDir failed
 
 Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
 ---

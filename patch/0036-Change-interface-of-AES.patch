@@ -1,7 +1,7 @@
-From dfba4591d298351872265e341cdb2a947e780420 Mon Sep 17 00:00:00 2001
+From 5bb1bd62dd632d7395589f6feb6254eadfb229c8 Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Fri, 17 Jan 2020 02:50:13 -0500
-Subject: [PATCH 36/37] Change interface of AES
+Subject: [PATCH 36/38] Change interface of AES
 
 Signed-off-by: WangFengTu <wangfengtu@huawei.com>
 ---

@@ -1,7 +1,7 @@
-From c91a85aae78398cd6dcbe0b38c1af2da752aa946 Mon Sep 17 00:00:00 2001
+From a6ac890638c85f515a57de9ec6d68089f11d1db1 Mon Sep 17 00:00:00 2001
 From: LiuHao <liuhao27@huawei.com>
 Date: Sat, 25 May 2019 16:45:28 +0800
-Subject: [PATCH 19/37] optimize mount operator
+Subject: [PATCH 19/38] optimize mount operator
 
 1. split mountpoints.json to each container
 2. refactor mount operator

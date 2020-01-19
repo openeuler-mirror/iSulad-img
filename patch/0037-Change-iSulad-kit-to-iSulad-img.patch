@@ -1,0 +1,24 @@
+From 7d27634b73228d8e9f1fefd3a4f482c2bcdb3c44 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Tue, 21 Jan 2020 04:04:44 -0500
+Subject: [PATCH 37/38] Change iSulad-kit to iSulad-img
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ vendor/github.com/containers/image/pkg/docker/aes/aes.go | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/vendor/github.com/containers/image/pkg/docker/aes/aes.go b/vendor/github.com/containers/image/pkg/docker/aes/aes.go
+index 9eda48e..e9c62b7 100644
+--- a/vendor/github.com/containers/image/pkg/docker/aes/aes.go
++++ b/vendor/github.com/containers/image/pkg/docker/aes/aes.go
+@@ -1,5 +1,5 @@
+ // Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
+-// iSulad-kit licensed under the Mulan PSL v1.
++// iSulad-img licensed under the Mulan PSL v1.
+ // You can use this software according to the terms and conditions of the Mulan PSL v1.
+ // You may obtain a copy of Mulan PSL v1 at:
+ //     http://license.coscl.org.cn/MulanPSL
+-- 
+2.19.1
+

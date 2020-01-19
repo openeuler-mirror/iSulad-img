@@ -1,7 +1,7 @@
-From 5ae6ad5bcbe8c393d008a5ab6cf8b298d1009b0b Mon Sep 17 00:00:00 2001
+From 1b8bc8ba5587f86278230c982a33753c89ab8ea0 Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Tue, 16 Apr 2019 00:44:20 -0400
-Subject: [PATCH 05/37] isulad-kit-vendor: fix parseSize of float accurancy
+Subject: [PATCH 05/38] isulad-kit-vendor: fix parseSize of float accurancy
 
 Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
 ---
