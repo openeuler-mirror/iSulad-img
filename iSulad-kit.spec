@@ -1,5 +1,5 @@
 %global _version 1.0.12
-%global _release 20190809.172307.git763c5091
+%global _release 20200211.091049.gita4ddcad0
 Name:       iSulad-kit
 Version:    %{_version}
 Release:    %{_release}
@@ -13,6 +13,7 @@ Source0:    iSulad-kit-1.0.tar.gz
 
 BuildRequires:  golang >= 1.8.3
 BuildRequires:  gpgme gpgme-devel
+BuildRequires:  device-mapper-devel
 
 %description
 A tool for downloading iSulad images, written in go language

@@ -1,0 +1,560 @@
+From 415fb96c0f9d02f92acd1392209e95749d916b52 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Sun, 19 Jan 2020 11:25:09 +0800
+Subject: [PATCH 37/37] Fix some devicemapper bugs
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../storage/drivers/devmapper/deviceset.go    | 74 +++++++++++++++++--
+ .../storage/drivers/devmapper/driver.go       | 44 ++++++++---
+ .../storage/drivers/devmapper/sem_stat.go     | 36 +++++++++
+ .../storage/pkg/devicemapper/devmapper.go     | 65 ++++++++++++++--
+ .../pkg/devicemapper/devmapper_wrapper.go     | 72 ++++++++++++++++++
+ vendor/github.com/containers/storage/store.go |  7 +-
+ 6 files changed, 274 insertions(+), 24 deletions(-)
+ create mode 100644 vendor/github.com/containers/storage/drivers/devmapper/sem_stat.go
+
+diff --git a/vendor/github.com/containers/storage/drivers/devmapper/deviceset.go b/vendor/github.com/containers/storage/drivers/devmapper/deviceset.go
+index b6f22e9..4ebad51 100644
+--- a/vendor/github.com/containers/storage/drivers/devmapper/deviceset.go
++++ b/vendor/github.com/containers/storage/drivers/devmapper/deviceset.go
+@@ -34,13 +34,16 @@ import (
+ )
+ 
+ var (
+-	defaultDataLoopbackSize      int64  = 100 * 1024 * 1024 * 1024
+-	defaultMetaDataLoopbackSize  int64  = 2 * 1024 * 1024 * 1024
+-	defaultBaseFsSize            uint64 = 10 * 1024 * 1024 * 1024
+-	defaultThinpBlockSize        uint32 = 128 // 64K = 128 512b sectors
+-	defaultUdevSyncOverride             = false
+-	maxDeviceID                         = 0xffffff // 24 bit, pool limit
+-	deviceIDMapSz                       = (maxDeviceID + 1) / 8
++	defaultDataLoopbackSize     int64  = 100 * 1024 * 1024 * 1024
++	defaultMetaDataLoopbackSize int64  = 2 * 1024 * 1024 * 1024
++	defaultBaseFsSize           uint64 = 10 * 1024 * 1024 * 1024
++	defaultThinpBlockSize       uint32 = 128 // 64K = 128 512b sectors
++	defaultUdevSyncOverride            = false
++	maxDeviceID                        = 0xffffff // 24 bit, pool limit
++	deviceIDMapSz                      = (maxDeviceID + 1) / 8
++	// The default timeout for latest systemd on RTOS and EulerOS is 180s
++	// we use 185s to make sure the timeout really happened.
++	defaultUdevWaitTimeout              = 185
+ 	driverDeferredRemovalSupport        = false
+ 	enableDeferredRemoval               = false
+ 	enableDeferredDeletion              = false
+@@ -1409,6 +1412,8 @@ func (devices *DeviceSet) rollbackTransaction() error {
+ 		devices.markDeviceIDFree(devices.DeviceID)
+ 	}
+ 
++	delete(devices.Devices, dinfo.Hash)
++
+ 	if err := devices.removeTransactionMetaData(); err != nil {
+ 		logrus.Errorf("devmapper: Unable to remove transaction meta file %s: %s", devices.transactionMetaFile(), err)
+ 	}
+@@ -1746,6 +1751,35 @@ func (devices *DeviceSet) initDevmapper(doInit bool) (retErr error) {
+ 	devices.devicePrefix = fmt.Sprintf("container-%d:%d-%d", major(st.Dev), minor(st.Dev), st.Ino)
+ 	logrus.Debugf("devmapper: Generated prefix: %s", devices.devicePrefix)
+ 
++	deviceNames, err := devicemapper.GetDeviceList()
++	if err != nil {
++		logrus.Debugf("devmapper: Failed to get device list: %s", err)
++	}
++
++	for _, name := range deviceNames {
++		if !strings.HasPrefix(name, devices.devicePrefix) {
++			continue
++		}
++		_, length, _, _, err := devicemapper.GetStatus(name)
++		if err != nil {
++			logrus.Warnf("devmapper: get device status(%s): %s", name, err)
++			continue
++		}
++		// remove broken device
++		if length == 0 {
++			if err := devicemapper.RemoveDevice(name); err != nil {
++				logrus.Warnf("devmapper: remove broken device(%s): %s", name, err)
++			}
++			logrus.Debugf("devmapper: remove broken device: %s", name)
++		}
++		if _, err := os.Stat(filepath.Join("/dev/mapper/", name)); err != nil {
++			if err := devicemapper.RemoveDevice(name); err != nil {
++				logrus.Warnf("devmapper: remove incompelete device(%s): %v", name, err)
++			}
++			logrus.Debugf("devmapper: remove incompelete device: %s", name)
++		}
++	}
++
+ 	// Check for the existence of the thin-pool device
+ 	poolExists, err := devices.thinPoolExists(devices.getPoolName())
+ 	if err != nil {
+@@ -2161,6 +2195,13 @@ func (devices *DeviceSet) deactivateDeviceMode(info *devInfo, deferredRemove boo
+ 
+ 	if deferredRemove {
+ 		err = devicemapper.RemoveDeviceDeferred(info.Name())
++		if err != nil {
++			if err == devicemapper.ErrEnxio {
++				logrus.Warnf("devmapper: device %s has gone", info.Name())
++				return nil
++			}
++			return err
++		}
+ 	} else {
+ 		err = devices.removeDevice(info.Name())
+ 	}
+@@ -2445,6 +2486,18 @@ func (devices *DeviceSet) UnmountDevice(hash, mountPath string) error {
+ 	}
+ 	logrus.Debug("devmapper: Unmount done")
+ 
++	// Remove the mountpoint here. Removing the mountpoint (in newer kernels)
++	// will cause all other instances of this mount in other mount namespaces
++	// to be killed (this is an anti-DoS measure that is necessary for things
++	// like devicemapper). This is necessary to avoid cases where a libdm mount
++	// that is present in another namespace will cause subsequent RemoveDevice
++	// operations to fail. We ignore any errors here because this may fail on
++	// older kernels which don't have
++	// torvalds/linux@8ed936b5671bfb33d89bc60bdcc7cf0470ba52fe applied.
++	if err := os.Remove(mountPath); err != nil {
++		logrus.Debugf("devmapper: error doing a remove on unmounted device %s: %v", mountPath, err)
++	}
++
+ 	return devices.deactivateDevice(info)
+ }
+ 
+@@ -2665,6 +2718,7 @@ func NewDeviceSet(root string, doInit bool, options []string, uidMaps, gidMaps [
+ 
+ 	foundBlkDiscard := false
+ 	var lvmSetupConfig directLVMConfig
++	udevWaitTimeout := int64(defaultUdevWaitTimeout)
+ 	testMode := false
+ 	for _, option := range options {
+ 		key, val, err := parsers.ParseKeyValueOpt(option)
+@@ -2815,6 +2869,11 @@ func NewDeviceSet(root string, doInit bool, options []string, uidMaps, gidMaps [
+ 			devicemapper.LogInit(devicemapper.DefaultLogger{
+ 				Level: int(level),
+ 			})
++		case "dm.udev_wait_timeout":
++			udevWaitTimeout, err = strconv.ParseInt(val, 10, 32)
++			if err != nil {
++				return nil, err
++			}
+ 		case "test":
+ 			testMode, err = strconv.ParseBool(val)
+ 			if err != nil {
+@@ -2824,6 +2883,7 @@ func NewDeviceSet(root string, doInit bool, options []string, uidMaps, gidMaps [
+ 			return nil, fmt.Errorf("devmapper: Unknown option %s", key)
+ 		}
+ 	}
++	devicemapper.SetUdevWaitTimtout(udevWaitTimeout)
+ 
+ 	if !testMode {
+ 		if err := validateLVMConfig(lvmSetupConfig); err != nil {
+diff --git a/vendor/github.com/containers/storage/drivers/devmapper/driver.go b/vendor/github.com/containers/storage/drivers/devmapper/driver.go
+index 39a4fbe..f80643f 100644
+--- a/vendor/github.com/containers/storage/drivers/devmapper/driver.go
++++ b/vendor/github.com/containers/storage/drivers/devmapper/driver.go
+@@ -14,9 +14,10 @@ import (
+ 	"github.com/containers/storage/pkg/idtools"
+ 	"github.com/containers/storage/pkg/locker"
+ 	"github.com/containers/storage/pkg/mount"
+-	"github.com/containers/storage/pkg/system"
+ 	units "github.com/docker/go-units"
++	"github.com/pkg/errors"
+ 	"github.com/sirupsen/logrus"
++	"golang.org/x/sys/unix"
+ )
+ 
+ func init() {
+@@ -40,10 +41,6 @@ func Init(home string, options []string, uidMaps, gidMaps []idtools.IDMap) (grap
+ 		return nil, err
+ 	}
+ 
+-	if err := mount.MakePrivate(home); err != nil {
+-		return nil, err
+-	}
+-
+ 	d := &Driver{
+ 		DeviceSet: deviceSet,
+ 		home:      home,
+@@ -94,6 +91,14 @@ func (d *Driver) Status() [][2]string {
+ 	if vStr, err := devicemapper.GetLibraryVersion(); err == nil {
+ 		status = append(status, [2]string{"Library Version", vStr})
+ 	}
++
++	usz, mni, err := checkSemSetStat()
++	status = append(status, [2]string{"Semaphore Set Used", fmt.Sprintf("%d", usz)})
++	status = append(status, [2]string{"Semaphore Set Total", fmt.Sprintf("%d", mni)})
++	if err != nil {
++		status = append(status, [2]string{"WARNING", fmt.Sprintf("%v", err)})
++	}
++
+ 	return status
+ }
+ 
+@@ -109,18 +114,25 @@ func (d *Driver) Metadata(id string) (map[string]string, error) {
+ 	metadata["DeviceId"] = strconv.Itoa(m.deviceID)
+ 	metadata["DeviceSize"] = strconv.FormatUint(m.deviceSize, 10)
+ 	metadata["DeviceName"] = m.deviceName
++	metadata["MergedDir"] = path.Join(d.home, "mnt", id, "rootfs")
+ 	return metadata, nil
+ }
+ 
+ // Cleanup unmounts a device.
+ func (d *Driver) Cleanup() error {
+ 	err := d.DeviceSet.Shutdown(d.home)
++	umountErr := mount.RecursiveUnmount(d.home)
++
++	// in case we have two errors, prefer the one from Shutdown()
++	if err != nil {
++		return err
++	}
+ 
+-	if err2 := mount.Unmount(d.home); err == nil {
+-		err = err2
++	if umountErr != nil {
++		return errors.Wrapf(umountErr, "error unmounting %s", d.home)
+ 	}
+ 
+-	return err
++	return nil
+ }
+ 
+ // CreateReadWrite creates a layer that is writable for use as a container
+@@ -158,7 +170,21 @@ func (d *Driver) Remove(id string) error {
+ 	if err := d.DeviceSet.DeleteDevice(id, false); err != nil {
+ 		return fmt.Errorf("failed to remove device %s: %v", id, err)
+ 	}
+-	return system.EnsureRemoveAll(path.Join(d.home, "mnt", id))
++
++	// Most probably the mount point is already removed on Put()
++	// (see DeviceSet.UnmountDevice()), but just in case it was not
++	// let's try to remove it here as well, ignoring errors as
++	// an older kernel can return EBUSY if e.g. the mount was leaked
++	// to other mount namespaces. A failure to remove the container's
++	// mount point is not important and should not be treated
++	// as a failure to remove the container.
++	mp := path.Join(d.home, "mnt", id)
++	err := unix.Rmdir(mp)
++	if err != nil && !os.IsNotExist(err) {
++		logrus.WithField("storage-driver", "devicemapper").Warnf("unable to remove mount point %q: %s", mp, err)
++	}
++
++	return nil
+ }
+ 
+ // Get mounts a device with given id into the root filesystem
+diff --git a/vendor/github.com/containers/storage/drivers/devmapper/sem_stat.go b/vendor/github.com/containers/storage/drivers/devmapper/sem_stat.go
+new file mode 100644
+index 0000000..2aa90c1
+--- /dev/null
++++ b/vendor/github.com/containers/storage/drivers/devmapper/sem_stat.go
+@@ -0,0 +1,36 @@
++// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
++// iSulad-kit licensed under the Mulan PSL v1.
++// You can use this software according to the terms and conditions of the Mulan PSL v1.
++// You may obtain a copy of Mulan PSL v1 at:
++//     http://license.coscl.org.cn/MulanPSL
++// THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
++// IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR
++// PURPOSE.
++// See the Mulan PSL v1 for more details.
++// Description: iSulad image kit
++// Author: liruilin
++// Create: 2019-01-19
++
++package devmapper
++
++/*
++#include <sys/types.h>
++#include <sys/sem.h>
++int mysemctl(int cmd, struct seminfo *p){
++        return semctl(0, 0, cmd, p);
++}
++*/
++import "C"
++import (
++	"fmt"
++)
++
++func checkSemSetStat() (int, int, error) {
++	var seminfo *C.struct_seminfo = new(C.struct_seminfo)
++	C.mysemctl(C.SEM_INFO, seminfo)
++	var err error = nil
++	if seminfo.semusz == seminfo.semmni {
++		err = fmt.Errorf("system semaphore nums has attached limit: %d", int(seminfo.semusz))
++	}
++	return int(seminfo.semusz), int(seminfo.semmni), err
++}
+diff --git a/vendor/github.com/containers/storage/pkg/devicemapper/devmapper.go b/vendor/github.com/containers/storage/pkg/devicemapper/devmapper.go
+index 6a0ac24..48d760c 100644
+--- a/vendor/github.com/containers/storage/pkg/devicemapper/devmapper.go
++++ b/vendor/github.com/containers/storage/pkg/devicemapper/devmapper.go
+@@ -7,6 +7,7 @@ import (
+ 	"fmt"
+ 	"os"
+ 	"runtime"
++	"time"
+ 	"unsafe"
+ 
+ 	"github.com/sirupsen/logrus"
+@@ -54,11 +55,13 @@ var (
+ 	ErrTaskGetDeps          = errors.New("dm_task_get_deps failed")
+ 	ErrTaskGetInfo          = errors.New("dm_task_get_info failed")
+ 	ErrTaskGetDriverVersion = errors.New("dm_task_get_driver_version failed")
++	ErrTaskGetNames         = errors.New("dm_task_get_names failed")
+ 	ErrTaskDeferredRemove   = errors.New("dm_task_deferred_remove failed")
+ 	ErrTaskSetCookie        = errors.New("dm_task_set_cookie failed")
+ 	ErrNilCookie            = errors.New("cookie ptr can't be nil")
+ 	ErrGetBlockSize         = errors.New("Can't get block size")
+ 	ErrUdevWait             = errors.New("wait on udev cookie failed")
++	ErrUdevWaitTimeout      = errors.New("wait on udev cookie time out")
+ 	ErrSetDevDir            = errors.New("dm_set_dev_dir failed")
+ 	ErrGetLibraryVersion    = errors.New("dm_get_library_version failed")
+ 	ErrCreateRemoveTask     = errors.New("Can't create task of type deviceRemove")
+@@ -70,9 +73,11 @@ var (
+ )
+ 
+ var (
+-	dmSawBusy  bool
+-	dmSawExist bool
+-	dmSawEnxio bool // No Such Device or Address
++	dmSawBusy         bool
++	dmSawExist        bool
++	dmSawEnxio        bool // No Such Device or Address
++	dmSawEnoData      bool // No data available
++	dmUdevWaitTimeout int64
+ )
+ 
+ type (
+@@ -236,6 +241,14 @@ func (t *Task) getInfoWithDeferred() (*Info, error) {
+ 	return info, nil
+ }
+ 
++func (t *Task) getDeviceList() ([]string, error) {
++	res := DmTaskGetNames(t.unmanaged)
++	if res == nil {
++		return nil, ErrTaskGetNames
++	}
++	return res, nil
++}
++
+ func (t *Task) getDriverVersion() (string, error) {
+ 	res := DmTaskGetDriverVersion(t.unmanaged)
+ 	if res == "" {
+@@ -254,13 +267,36 @@ func (t *Task) getNextTarget(next unsafe.Pointer) (nextPtr unsafe.Pointer, start
+ 
+ // UdevWait waits for any processes that are waiting for udev to complete the specified cookie.
+ func UdevWait(cookie *uint) error {
+-	if res := DmUdevWait(*cookie); res != 1 {
+-		logrus.Debugf("devicemapper: Failed to wait on udev cookie %d, %d", *cookie, res)
+-		return ErrUdevWait
++	chError := make(chan error)
++	go func() {
++		if res := DmUdevWait(*cookie); res != 1 {
++			logrus.Debugf("Failed to wait on udev cookie %d", *cookie)
++			chError <- ErrUdevWait
++		}
++		chError <- nil
++	}()
++	select {
++	case err := <-chError:
++		return err
++	case <-time.After(time.Second * time.Duration(dmUdevWaitTimeout)):
++		logrus.Errorf("Failed to wait on udev cookie %d: timeout %v", *cookie, dmUdevWaitTimeout)
++		if res := DmUdevComplete(*cookie); res != 1 {
++			// This is bad to return here
++			logrus.Errorf("Failed to complete udev cookie %d on udev wait timeout", *cookie)
++			return ErrUdevWaitTimeout
++		}
++		// wait DmUdevWait return after DmUdevComplete
++		<-chError
++		return ErrUdevWaitTimeout
+ 	}
+ 	return nil
+ }
+ 
++// SetUdevWaitTimtout sets udev wait timeout
++func SetUdevWaitTimtout(t int64) {
++	dmUdevWaitTimeout = t
++}
++
+ // SetDevDir sets the dev folder for the device mapper library (usually /dev).
+ func SetDevDir(dir string) error {
+ 	if res := DmSetDevDir(dir); res != 1 {
+@@ -543,6 +579,18 @@ func GetInfoWithDeferred(name string) (*Info, error) {
+ 	return task.getInfoWithDeferred()
+ }
+ 
++// GetDevices get all device name
++func GetDeviceList() ([]string, error) {
++	task := TaskCreate(deviceList)
++	if task == nil {
++		return nil, fmt.Errorf("devicemapper: Can't create deviceList task")
++	}
++	if err := task.run(); err != nil {
++		return nil, err
++	}
++	return task.getDeviceList()
++}
++
+ // GetDriverVersion is the programmatic example of "dmsetup version".
+ // It outputs version information of the driver.
+ func GetDriverVersion() (string, error) {
+@@ -710,10 +758,15 @@ func DeleteDevice(poolName string, deviceID int) error {
+ 	}
+ 
+ 	dmSawBusy = false
++	dmSawEnoData = false
+ 	if err := task.run(); err != nil {
+ 		if dmSawBusy {
+ 			return ErrBusy
+ 		}
++		if dmSawEnoData {
++			logrus.Debugf("devicemapper: Device(id: %d) from pool(%s) does not exist", deviceID, poolName)
++			return nil
++		}
+ 		return fmt.Errorf("devicemapper: Error running DeleteDevice %s", err)
+ 	}
+ 	return nil
+diff --git a/vendor/github.com/containers/storage/pkg/devicemapper/devmapper_wrapper.go b/vendor/github.com/containers/storage/pkg/devicemapper/devmapper_wrapper.go
+index 190d83d..b7fd8b8 100644
+--- a/vendor/github.com/containers/storage/pkg/devicemapper/devmapper_wrapper.go
++++ b/vendor/github.com/containers/storage/pkg/devicemapper/devmapper_wrapper.go
+@@ -6,6 +6,9 @@ package devicemapper
+ #define _GNU_SOURCE
+ #include <libdevmapper.h>
+ #include <linux/fs.h>   // FIXME: present only for BLKGETSIZE64, maybe we can remove it?
++#include <string.h>
++#include <stdlib.h>
++
+ 
+ // FIXME: Can't we find a way to do the logging in pure Go?
+ extern void StorageDevmapperLogCallback(int level, char *file, int line, int dm_errno_or_class, char *str);
+@@ -32,6 +35,51 @@ static void	log_with_errno_init()
+ {
+ 	dm_log_with_errno_init(log_cb);
+ }
++
++// FIXME: how to use dm_task_get_names directly
++static char **local_dm_task_get_names(struct dm_task *dmt, unsigned int *size) {
++	struct dm_names *ns, *ns1;
++	unsigned next = 0;
++	char **result;
++	int i = 0;
++
++	if (!(ns = dm_task_get_names(dmt)))
++		return NULL;
++
++	// No devices found
++	if (!ns->dev)
++		return NULL;
++
++	// calucate the total devices
++	ns1 = ns;
++	*size = 0;
++	do {
++		ns1 = (struct dm_names *)((char *) ns1 + next);
++		(*size)++;
++		next = ns1->next;
++	} while (next);
++
++	result = malloc(sizeof(char *)* (*size));
++	if (!result)
++		return NULL;
++
++	next = 0;
++	do {
++		ns = (struct dm_names *)((char *) ns + next);
++		result[i++] = strdup(ns->name);
++		next = ns->next;
++	} while (next);
++
++	return result;
++}
++
++void free_devices_names(char **names, unsigned int size) {
++	int i;
++
++	for (i = 0; i < size; i++)
++		free(names[i]);
++	free(names);
++}
+ */
+ import "C"
+ 
+@@ -69,6 +117,7 @@ var (
+ 	DmTaskGetDeps             = dmTaskGetDepsFct
+ 	DmTaskGetInfo             = dmTaskGetInfoFct
+ 	DmTaskGetDriverVersion    = dmTaskGetDriverVersionFct
++	DmTaskGetNames            = dmTaskGetNamesFct
+ 	DmTaskRun                 = dmTaskRunFct
+ 	DmTaskSetAddNode          = dmTaskSetAddNodeFct
+ 	DmTaskSetCookie           = dmTaskSetCookieFct
+@@ -77,6 +126,7 @@ var (
+ 	DmTaskSetRo               = dmTaskSetRoFct
+ 	DmTaskSetSector           = dmTaskSetSectorFct
+ 	DmUdevWait                = dmUdevWaitFct
++	DmUdevComplete            = dmUdevCompleteFct
+ 	DmUdevSetSyncSupport      = dmUdevSetSyncSupportFct
+ 	DmUdevGetSyncSupport      = dmUdevGetSyncSupportFct
+ 	DmCookieSupported         = dmCookieSupportedFct
+@@ -189,6 +239,24 @@ func dmTaskGetInfoFct(task *cdmTask, info *Info) int {
+ 	return int(C.dm_task_get_info((*C.struct_dm_task)(task), &Cinfo))
+ }
+ 
++func dmTaskGetNamesFct(task *cdmTask) []string {
++	var res []string
++	var names []*C.char
++	len := C.uint(0)
++	Cnames := C.local_dm_task_get_names((*C.struct_dm_task)(task), &len)
++	defer C.free_devices_names(Cnames, len)
++
++	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&names))
++	hdr.Cap = int(len)
++	hdr.Len = int(len)
++	hdr.Data = uintptr(unsafe.Pointer(Cnames))
++
++	for _, name := range names {
++		res = append(res, C.GoString(name))
++	}
++	return res
++}
++
+ func dmTaskGetDriverVersionFct(task *cdmTask) string {
+ 	buffer := C.malloc(128)
+ 	defer C.free(buffer)
+@@ -227,6 +295,10 @@ func dmUdevWaitFct(cookie uint) int {
+ 	return int(C.dm_udev_wait(C.uint32_t(cookie)))
+ }
+ 
++func dmUdevCompleteFct(cookie uint) int {
++	return int(C.dm_udev_complete(C.uint32_t(cookie)))
++}
++
+ func dmCookieSupportedFct() int {
+ 	return int(C.dm_cookie_supported())
+ }
+diff --git a/vendor/github.com/containers/storage/store.go b/vendor/github.com/containers/storage/store.go
+index f346dc9..2ebd558 100644
+--- a/vendor/github.com/containers/storage/store.go
++++ b/vendor/github.com/containers/storage/store.go
+@@ -2833,12 +2833,15 @@ func (s *store) Unmount(id string, force bool) (bool, error) {
+ 	if err != nil {
+ 		return false, err
+ 	}
++
+ 	rlstore.Lock()
+-	defer rlstore.Unlock()
+ 	if modified, err := rlstore.Modified(); modified || err != nil {
+ 		rlstore.Load()
+ 	}
+-	if rlstore.Exists(id) {
++	exist := rlstore.Exists(id)
++	rlstore.Unlock()
++
++	if exist {
+ 		return rlstore.Unmount(id, force)
+ 	}
+ 	return false, ErrLayerUnknown
+-- 
+2.19.1
+

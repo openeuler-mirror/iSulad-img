@@ -1,7 +1,7 @@
-From 68685fc92cd849a9d5dfedfbf5039a7326f7e8d9 Mon Sep 17 00:00:00 2001
+From 193e4048d49956aff329fe2fa63b423c1cb713c1 Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Mon, 20 May 2019 10:31:12 -0400
-Subject: [PATCH 17/36] isulad-kit-vendor: fix compile error
+Subject: [PATCH 17/37] isulad-kit-vendor: fix compile error
 
 Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
 ---
