@@ -33,7 +33,7 @@ GO_LDFLAGS="-s -w -extldflags -static -X main.gitCommit=${GIT_COMMIT} -X main.bu
 GOTMPDIR=/tmp/isulad-kit
 
 # ifeq ($(DISABLE_CGO), 1)
-		override BUILDTAGS = containers_image_ostree_stub exclude_graphdriver_devicemapper exclude_graphdriver_btrfs containers_image_openpgp
+		override BUILDTAGS = containers_image_ostree_stub exclude_graphdriver_btrfs containers_image_openpgp
 # endif
 
 .PHONY: all isulad_kit static  clean

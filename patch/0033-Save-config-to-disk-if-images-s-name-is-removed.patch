@@ -1,7 +1,7 @@
-From 4707f8e197c0e866fb4b6baaf27ef4bae95d35ca Mon Sep 17 00:00:00 2001
+From 599d6b66660450c8e0a295969e4dd89320ea2364 Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Wed, 18 Dec 2019 07:29:06 -0500
-Subject: [PATCH 33/36] Save config to disk if images's name is removed
+Subject: [PATCH 33/37] Save config to disk if images's name is removed
 
 Signed-off-by: WangFengTu <wangfengtu@huawei.com>
 ---

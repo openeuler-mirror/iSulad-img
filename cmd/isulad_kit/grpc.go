@@ -617,24 +617,17 @@ func (s *grpcImageService) GraphdriverStatus(ctx context.Context, req *pb.Graphd
 		}, err
 	}
 
-	var gotBackingFs, gotSupportsDType, gotNativeOverlayDiff bool
+	var gotBackingFs bool
 	resp := &pb.GraphdriverStatusResponse{}
 	for _, kv := range status {
-		switch kv[0] {
-		case "Backing Filesystem":
-			resp.BackingFs = kv[1]
+		if kv[0] == "Backing Filesystem" {
 			gotBackingFs = true
-		case "Supports d_type":
-			resp.SupportsDType = (kv[1] == "true")
-			gotSupportsDType = true
-		case "Native Overlay Diff":
-			resp.NativeOverlayDiff = (kv[1] == "true")
-			gotNativeOverlayDiff = true
 		}
+		resp.Status += fmt.Sprintf("%s: %s\n", kv[0], kv[1])
 	}
 
-	if gotBackingFs != true || gotSupportsDType != true || gotNativeOverlayDiff != true {
-		err := errors.New("Internal error, failed to get all infomation")
+	if !gotBackingFs {
+		err := errors.New("Internal error, failed to get backing filesystem")
 		return &pb.GraphdriverStatusResponse{
 			Errmsg: err.Error(),
 			Cc:     1,
