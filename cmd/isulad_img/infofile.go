@@ -125,7 +125,7 @@ func isDaemonInstanceExist(infoFile string) (string, error) {
 
 func newInfoFile(infoFile string, sockAddr string) error {
 	_, err := isDaemonInstanceExist(infoFile)
-	if err == os.ErrNotExist {
+	if !strings.Contains(err.Error(), daemonInstanceExist) {
 		return createInfoFile(infoFile, sockAddr)
 	}
 
