@@ -1,4 +1,4 @@
-ISULAD_KIT_BIN=./isulad_kit
+ISULAD_KIT_BIN=./isulad-img
 BUILT=$(shell echo `date +'%Y%m%d-%H:%M:%S'`)
 
 ifeq ($(shell uname),Darwin)
@@ -30,24 +30,24 @@ LOCAL_BUILD_TAGS = $(BTRFS_BUILD_TAG) $(LIBDM_BUILD_TAG) $(DARWIN_BUILD_TAG)
 BUILDTAGS += $(LOCAL_BUILD_TAGS)
 GIT_COMMIT := $(shell git rev-parse HEAD 2> /dev/null || true)
 GO_LDFLAGS="-s -w -extldflags -static -X main.gitCommit=${GIT_COMMIT} -X main.built=${BUILT}"
-GOTMPDIR=/tmp/isulad-kit
+GOTMPDIR=/tmp/isulad-img
 
 # ifeq ($(DISABLE_CGO), 1)
 		override BUILDTAGS = containers_image_ostree_stub exclude_graphdriver_btrfs containers_image_openpgp
 # endif
 
-.PHONY: all isulad_kit static  clean
+.PHONY: all isulad_img static  clean
 
-all: isulad_kit
+all: isulad_img
 
-isulad_kit: link
+isulad_img: link
 	echo $(GOPATH)
 	echo $(CURDIR)
 	rm -rf $(CURDIR)/src/isula-image/isula
 	mkdir -p $(CURDIR)/src/isula-image/
 	cp -rf isula $(CURDIR)/src/isula-image/
 	mkdir -p ${GOTMPDIR}
-	$(GPGME_ENV) go build ${GO_DYN_FLAGS} -ldflags "-extldflags -zrelro -extldflags -znow -tmpdir ${GOTMPDIR} -X main.gitCommit=${GIT_COMMIT}" -gcflags "$(GOGCFLAGS)" -tags "$(BUILDTAGS)" -o isulad_kit ./cmd/isulad_kit
+	$(GPGME_ENV) go build ${GO_DYN_FLAGS} -ldflags "-extldflags -zrelro -extldflags -znow -tmpdir ${GOTMPDIR} -X main.gitCommit=${GIT_COMMIT}" -gcflags "$(GOGCFLAGS)" -tags "$(BUILDTAGS)" -o isulad-img ./cmd/isulad_img
 	rm -rf ${GOTMPDIR}
 	rm -rf $(CURDIR)/src/isula-image/isula
 
@@ -58,7 +58,7 @@ static: link
 	mkdir -p $(CURDIR)/src/isula-image/
 	cp -rf isula $(CURDIR)/src/isula-image/
 	mkdir -p ${GOTMPDIR}
-	$(GPGME_ENV) go build -ldflags "-tmpdir ${GOTMPDIR} -extldflags \"-static\" -X main.gitCommit=${GIT_COMMIT}" -gcflags "$(GOGCFLAGS)" -tags "$(BUILDTAGS)" -o isulad_kit ./cmd/isulad_kit
+	$(GPGME_ENV) go build -ldflags "-tmpdir ${GOTMPDIR} -extldflags \"-static\" -X main.gitCommit=${GIT_COMMIT}" -gcflags "$(GOGCFLAGS)" -tags "$(BUILDTAGS)" -o isulad-img ./cmd/isulad_img
 	rm -rf ${GOTMPDIR}
 	rm -rf $(CURDIR)/src/isula-image/isula
 
@@ -70,7 +70,7 @@ clean:
 
 install:
 	install -d -m 755 ${INSTALLDIR}
-	install -m 755 ${ISULAD_KIT_BIN} ${INSTALLDIR}/isulad_kit
+	install -m 755 ${ISULAD_KIT_BIN} ${INSTALLDIR}/isulad-img
 	install -d -m 755 ${CONTAINERSSYSCONFIGDIR}
 	install -m 644 default-policy.json ${CONTAINERSSYSCONFIGDIR}/policy.json
 

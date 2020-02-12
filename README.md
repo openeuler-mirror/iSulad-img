@@ -1,7 +1,7 @@
-# iSulad-kit
+# iSulad-img
 
 This is a command line utility used by iSulad to performs various operations on container images.
-iSulad-kit is used to pull image from image repositories and prepare the read\write layers for containers.
+iSulad-img is used to pull image from image repositories and prepare the read\write layers for containers.
 
 ## How to Contribute
 
@@ -12,4 +12,4 @@ iSulad follows the kernel coding conventions. You can find a detailed introducti
 
 ## Licensing
 
-iSulad-kit is licensed under the Mulan PSL v1.
+iSulad-img is licensed under the Mulan PSL v1.
