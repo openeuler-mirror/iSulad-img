@@ -1,7 +1,7 @@
-From 094beaff346d67cecd95d726bdc2f9b7f288dc1d Mon Sep 17 00:00:00 2001
+From 32df7006bd864286ad1153d0c29016ff83a6fa97 Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Tue, 7 May 2019 03:40:58 -0400
-Subject: [PATCH 13/38] rmi: try to remove all layers info when rmi
+Subject: [PATCH 13/39] rmi: try to remove all layers info when rmi
 
 Signed-off-by: LiFeng <lifeng68@huawei.com>
 ---

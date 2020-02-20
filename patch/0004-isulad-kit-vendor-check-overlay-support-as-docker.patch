@@ -1,7 +1,7 @@
-From 9922ad9b93aa0c13af6dd4239829a67cfc9f6b61 Mon Sep 17 00:00:00 2001
+From 8ac69274e24f8d0df65c98aa7b2fbac7409b3f14 Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Tue, 9 Apr 2019 12:19:49 -0400
-Subject: [PATCH 04/38] isulad-kit-vendor: check overlay support as docker
+Subject: [PATCH 04/39] isulad-kit-vendor: check overlay support as docker
 
 we may got failed if always detect multi lower layer mount,
 when writed data more than rootfs quota for arm machine

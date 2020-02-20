@@ -1,7 +1,7 @@
-From 3fab31b29b361d9341de6fe26e87547836eecf26 Mon Sep 17 00:00:00 2001
+From 54a96b51ad48c5a63d7d252d93c86b73f8d6553e Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Mon, 20 May 2019 10:05:08 -0400
-Subject: [PATCH 16/38] isulad-kit-vendor: fix bug of concurrent run with quota
+Subject: [PATCH 16/39] isulad-kit-vendor: fix bug of concurrent run with quota
 
 reason: setProjectQuota using common mutex to avoid set the same
 project id for diffrent containers, this may also get the same

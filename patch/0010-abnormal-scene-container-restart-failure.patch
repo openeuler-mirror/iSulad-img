@@ -1,7 +1,7 @@
-From 9a36ef21c1216858932ec99de26864d05650f828 Mon Sep 17 00:00:00 2001
+From a1dc79376c725981962f311d66933a2b79fef9a2 Mon Sep 17 00:00:00 2001
 From: WuJing <wujing50@huawei.com>
 Date: Mon, 29 Apr 2019 16:46:09 +0800
-Subject: [PATCH 10/38] abnormal scene container restart failure
+Subject: [PATCH 10/39] abnormal scene container restart failure
 
 Solve the problem that the mountpoint.json write
 fails due to an abnormal condition, causing the container to fail to
