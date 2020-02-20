@@ -1,7 +1,7 @@
-From 9b677524de979c864138c61a5fe81738df4f45fa Mon Sep 17 00:00:00 2001
+From 2c62c38cfa3c4c43c0f94909492b2d8604aa0133 Mon Sep 17 00:00:00 2001
 From: WuJing <wujing50@huawei.com>
 Date: Mon, 13 May 2019 09:31:43 +0800
-Subject: [PATCH 14/38] isulad-kit-vendor: ensure remove container rootfs dir
+Subject: [PATCH 14/39] isulad-kit-vendor: ensure remove container rootfs dir
  when errmsg contain "File name too long"
 
 Signed-off-by: WuJing <wujing50@huawei.com>

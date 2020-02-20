@@ -1,7 +1,7 @@
-From 5e63890c78f9be9a2f4f95ac9e4848430655bf14 Mon Sep 17 00:00:00 2001
+From 981d80d7f9608a9c61b880dcdda95449c0fc5096 Mon Sep 17 00:00:00 2001
 From: LiuHao <liuhao27@huawei.com>
 Date: Fri, 19 Apr 2019 17:15:29 +0800
-Subject: [PATCH 08/38] same add group should skip
+Subject: [PATCH 08/39] same add group should skip
 
 same add group should skip
 

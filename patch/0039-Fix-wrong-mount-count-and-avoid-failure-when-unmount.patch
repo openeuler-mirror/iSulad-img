@@ -1,0 +1,55 @@
+From 5457b959c4c81c0e9836cd12b085eb5cfca44a7b Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Thu, 20 Feb 2020 11:17:42 +0800
+Subject: [PATCH 39/39] Fix wrong mount count and avoid failure when unmounting
+ an unmounted mountpoint
+
+Add lock when unmount mountpoint to avoid wrong mount count. And check if
+mountpoint is mounted when unmount it.
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../containers/storage/drivers/devmapper/deviceset.go       | 6 ++++--
+ vendor/github.com/containers/storage/store.go               | 6 ++----
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/drivers/devmapper/deviceset.go b/vendor/github.com/containers/storage/drivers/devmapper/deviceset.go
+index 4ebad51..f61d698 100644
+--- a/vendor/github.com/containers/storage/drivers/devmapper/deviceset.go
++++ b/vendor/github.com/containers/storage/drivers/devmapper/deviceset.go
+@@ -2481,8 +2481,10 @@ func (devices *DeviceSet) UnmountDevice(hash, mountPath string) error {
+ 	defer devices.Unlock()
+ 
+ 	logrus.Debugf("devmapper: Unmount(%s)", mountPath)
+-	if err := unix.Unmount(mountPath, unix.MNT_DETACH); err != nil {
+-		return err
++	if m, _ := Mounted(mountPath); m {
++		if err := unix.Unmount(mountPath, unix.MNT_DETACH); err != nil {
++			return err
++		}
+ 	}
+ 	logrus.Debug("devmapper: Unmount done")
+ 
+diff --git a/vendor/github.com/containers/storage/store.go b/vendor/github.com/containers/storage/store.go
+index 2ebd558..236eccd 100644
+--- a/vendor/github.com/containers/storage/store.go
++++ b/vendor/github.com/containers/storage/store.go
+@@ -2835,13 +2835,11 @@ func (s *store) Unmount(id string, force bool) (bool, error) {
+ 	}
+ 
+ 	rlstore.Lock()
++	defer rlstore.Unlock()
+ 	if modified, err := rlstore.Modified(); modified || err != nil {
+ 		rlstore.Load()
+ 	}
+-	exist := rlstore.Exists(id)
+-	rlstore.Unlock()
+-
+-	if exist {
++	if rlstore.Exists(id) {
+ 		return rlstore.Unmount(id, force)
+ 	}
+ 	return false, ErrLayerUnknown
+-- 
+2.19.1
+

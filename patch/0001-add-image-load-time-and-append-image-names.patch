@@ -1,7 +1,7 @@
-From cdcc00f2722603b873946a70c3dbd2a20539c1f8 Mon Sep 17 00:00:00 2001
+From 35753562ad1f8b4a7064f22ec68a5f2a65880663 Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Tue, 2 Apr 2019 23:37:17 -0400
-Subject: [PATCH 01/38] add image load time and append image names
+Subject: [PATCH 01/39] add image load time and append image names
 
 reason: 1. add image load time
         2. append image names when pull image
