@@ -24,13 +24,9 @@ func GetDiskUsageStats(path string) (uint64, uint64, error) {
 	var dirSize, inodeCount uint64
 
 	err := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
-		fileStat, error := os.Lstat(path)
-		if error != nil {
-			if fileStat.Mode()&os.ModeSymlink != 0 {
-				// Is a symlink; no error should be returned
-				return nil
-			}
-			return error
+		// Ignore invalid files
+		if err != nil {
+			return nil
 		}
 
 		dirSize += uint64(info.Size())
