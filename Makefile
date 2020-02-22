@@ -62,6 +62,11 @@ static: link
 	rm -rf ${GOTMPDIR}
 	rm -rf $(CURDIR)/src/isula-image/isula
 
+unit-test: link
+	echo $(GOPATH)
+	echo $(CURDIR)
+	go test -v github.com/containers/storage/drivers/devmapper
+
 proto:
 	protoc --go_out=plugins=grpc:. ./isula/isula_image.proto
 
