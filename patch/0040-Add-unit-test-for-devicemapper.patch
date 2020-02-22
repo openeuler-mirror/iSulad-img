@@ -1,0 +1,1085 @@
+From f5e658fff821614f52d1dbd5ec038e3b0dc99e4d Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Fri, 21 Feb 2020 23:06:20 -0500
+Subject: [PATCH 40/40] Add unit-test for devicemapper
+
+cherry-picked devicemapper related unit-test from
+https://github.com/containers/storage
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../drivers/devmapper/devmapper_test.go       | 155 ++++++
+ .../drivers/graphtest/graphtest_unix.go       | 462 ++++++++++++++++++
+ .../storage/drivers/graphtest/testutil.go     | 351 +++++++++++++
+ .../drivers/graphtest/testutil_unix.go        |  70 +++
+ 4 files changed, 1038 insertions(+)
+ create mode 100644 vendor/github.com/containers/storage/drivers/devmapper/devmapper_test.go
+ create mode 100644 vendor/github.com/containers/storage/drivers/graphtest/graphtest_unix.go
+ create mode 100644 vendor/github.com/containers/storage/drivers/graphtest/testutil.go
+ create mode 100644 vendor/github.com/containers/storage/drivers/graphtest/testutil_unix.go
+
+diff --git a/vendor/github.com/containers/storage/drivers/devmapper/devmapper_test.go b/vendor/github.com/containers/storage/drivers/devmapper/devmapper_test.go
+new file mode 100644
+index 0000000..d44a734
+--- /dev/null
++++ b/vendor/github.com/containers/storage/drivers/devmapper/devmapper_test.go
+@@ -0,0 +1,155 @@
++// +build linux,cgo
++
++package devmapper
++
++import (
++	"fmt"
++	"os"
++	"syscall"
++	"testing"
++	"time"
++
++	graphdriver "github.com/containers/storage/drivers"
++	"github.com/containers/storage/drivers/graphtest"
++)
++
++func init() {
++	// Reduce the size of the base fs and loopback for the tests
++	defaultDataLoopbackSize = 300 * 1024 * 1024
++	defaultMetaDataLoopbackSize = 200 * 1024 * 1024
++	defaultBaseFsSize = 300 * 1024 * 1024
++	defaultUdevSyncOverride = true
++	if err := initLoopbacks(); err != nil {
++		panic(err)
++	}
++}
++
++// initLoopbacks ensures that the loopback devices are properly created within
++// the system running the device mapper tests.
++func initLoopbacks() error {
++	statT, err := getBaseLoopStats()
++	if err != nil {
++		return err
++	}
++	// create at least 8 loopback files, ya, that is a good number
++	for i := 0; i < 8; i++ {
++		loopPath := fmt.Sprintf("/dev/loop%d", i)
++		// only create new loopback files if they don't exist
++		if _, err := os.Stat(loopPath); err != nil {
++			if mkerr := syscall.Mknod(loopPath,
++				uint32(statT.Mode|syscall.S_IFBLK), int((7<<8)|(i&0xff)|((i&0xfff00)<<12))); mkerr != nil {
++				return mkerr
++			}
++			os.Chown(loopPath, int(statT.Uid), int(statT.Gid))
++		}
++	}
++	return nil
++}
++
++// getBaseLoopStats inspects /dev/loop0 to collect uid,gid, and mode for the
++// loop0 device on the system.  If it does not exist we assume 0,0,0660 for the
++// stat data
++func getBaseLoopStats() (*syscall.Stat_t, error) {
++	loop0, err := os.Stat("/dev/loop0")
++	if err != nil {
++		if os.IsNotExist(err) {
++			return &syscall.Stat_t{
++				Uid:  0,
++				Gid:  0,
++				Mode: 0660,
++			}, nil
++		}
++		return nil, err
++	}
++	return loop0.Sys().(*syscall.Stat_t), nil
++}
++
++// This avoids creating a new driver for each test if all tests are run
++// Make sure to put new tests between TestDevmapperSetup and TestDevmapperTeardown
++func TestDevmapperSetup(t *testing.T) {
++	graphtest.GetDriver(t, "devicemapper", "test=1")
++}
++
++func TestDevmapperCreateEmpty(t *testing.T) {
++	graphtest.DriverTestCreateEmpty(t, "devicemapper", "test=1")
++}
++
++func TestDevmapperCreateBase(t *testing.T) {
++	graphtest.DriverTestCreateBase(t, "devicemapper", "test=1")
++}
++
++func TestDevmapperCreateSnap(t *testing.T) {
++	graphtest.DriverTestCreateSnap(t, "devicemapper", "test=1")
++}
++
++func TestDevmapperTeardown(t *testing.T) {
++	graphtest.PutDriver(t)
++}
++
++func TestDevmapperEcho(t *testing.T) {
++	graphtest.DriverTestEcho(t, "devicemapper", "test=1")
++}
++
++func TestDevmapperReduceLoopBackSize(t *testing.T) {
++	tenMB := int64(10 * 1024 * 1024)
++	testChangeLoopBackSize(t, -tenMB, defaultDataLoopbackSize, defaultMetaDataLoopbackSize)
++}
++
++func TestDevmapperIncreaseLoopBackSize(t *testing.T) {
++	tenMB := int64(10 * 1024 * 1024)
++	testChangeLoopBackSize(t, tenMB, defaultDataLoopbackSize+tenMB, defaultMetaDataLoopbackSize+tenMB)
++}
++
++func testChangeLoopBackSize(t *testing.T, delta, expectDataSize, expectMetaDataSize int64) {
++	driver := graphtest.GetDriver(t, "devicemapper", "test=1").(*graphtest.Driver).Driver.(*graphdriver.NaiveDiffDriver).ProtoDriver.(*Driver)
++	defer graphtest.PutDriver(t)
++	// make sure data or metadata loopback size are the default size
++	if s := driver.DeviceSet.Status(); s.Data.Total != uint64(defaultDataLoopbackSize) || s.Metadata.Total != uint64(defaultMetaDataLoopbackSize) {
++		t.Fatal("data or metadata loop back size is incorrect")
++	}
++	if err := driver.Cleanup(); err != nil {
++		t.Fatal(err)
++	}
++	//Reload
++	d, err := Init(driver.home, []string{fmt.Sprintf("dm.loopdatasize=%d", defaultDataLoopbackSize+delta),
++		fmt.Sprintf("dm.loopmetadatasize=%d", defaultMetaDataLoopbackSize+delta),
++		"test=1"}, nil, nil)
++	if err != nil {
++		t.Fatalf("error creating devicemapper driver: %v", err)
++	}
++	driver = d.(*graphdriver.NaiveDiffDriver).ProtoDriver.(*Driver)
++	if s := driver.DeviceSet.Status(); s.Data.Total != uint64(expectDataSize) || s.Metadata.Total != uint64(expectMetaDataSize) {
++		t.Fatal("data or metadata loop back size is incorrect")
++	}
++	if err := driver.Cleanup(); err != nil {
++		t.Fatal(err)
++	}
++}
++
++// Make sure devices.Lock() has been release upon return from cleanupDeletedDevices() function
++func TestDevmapperLockReleasedDeviceDeletion(t *testing.T) {
++	driver := graphtest.GetDriver(t, "devicemapper", "test=1").(*graphtest.Driver).Driver.(*graphdriver.NaiveDiffDriver).ProtoDriver.(*Driver)
++	defer graphtest.PutDriver(t)
++
++	// Call cleanupDeletedDevices() and after the call take and release
++	// DeviceSet Lock. If lock has not been released, this will hang.
++	driver.DeviceSet.cleanupDeletedDevices()
++
++	doneChan := make(chan bool)
++
++	go func() {
++		driver.DeviceSet.Lock()
++		defer driver.DeviceSet.Unlock()
++		doneChan <- true
++	}()
++
++	select {
++	case <-time.After(time.Second * 5):
++		// Timer expired. That means lock was not released upon
++		// function return and we are deadlocked. Release lock
++		// here so that cleanup could succeed and fail the test.
++		driver.DeviceSet.Unlock()
++		t.Fatal("Could not acquire devices lock after call to cleanupDeletedDevices()")
++	case <-doneChan:
++	}
++}
+diff --git a/vendor/github.com/containers/storage/drivers/graphtest/graphtest_unix.go b/vendor/github.com/containers/storage/drivers/graphtest/graphtest_unix.go
+new file mode 100644
+index 0000000..83e026c
+--- /dev/null
++++ b/vendor/github.com/containers/storage/drivers/graphtest/graphtest_unix.go
+@@ -0,0 +1,462 @@
++// +build linux freebsd solaris
++
++package graphtest
++
++import (
++	"bytes"
++	"fmt"
++	"io/ioutil"
++	"math/rand"
++	"os"
++	"path"
++	"path/filepath"
++	"reflect"
++	"testing"
++	"unsafe"
++
++	graphdriver "github.com/containers/storage/drivers"
++	"github.com/containers/storage/pkg/archive"
++	"github.com/containers/storage/pkg/stringid"
++	"github.com/docker/go-units"
++	"github.com/pkg/errors"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++	"golang.org/x/sys/unix"
++)
++
++var (
++	drv *Driver
++)
++
++// Driver conforms to graphdriver.Driver interface and
++// contains information such as root and reference count of the number of clients using it.
++// This helps in testing drivers added into the framework.
++type Driver struct {
++	graphdriver.Driver
++	root     string
++	refCount int
++}
++
++func newDriver(t testing.TB, name string, options []string) *Driver {
++	root, err := ioutil.TempDir("", "storage-graphtest-")
++	require.NoError(t, err)
++
++	require.NoError(t, os.MkdirAll(root, 0755))
++	d, err := graphdriver.GetDriver(name, graphdriver.Options{DriverOptions: options, Root: root})
++	if err != nil {
++		t.Logf("graphdriver: %v\n", err)
++		cause := errors.Cause(err)
++		if cause == graphdriver.ErrNotSupported || cause == graphdriver.ErrPrerequisites || cause == graphdriver.ErrIncompatibleFS {
++			t.Skipf("Driver %s not supported", name)
++		}
++		t.Fatal(err)
++	}
++	return &Driver{d, root, 1}
++}
++
++func cleanup(t testing.TB, d *Driver) {
++	if err := drv.Cleanup(); err != nil {
++		t.Fatal(err)
++	}
++	os.RemoveAll(d.root)
++}
++
++// GetDriver create a new driver with given name or return an existing driver with the name updating the reference count.
++func GetDriver(t testing.TB, name string, options ...string) graphdriver.Driver {
++	if drv == nil {
++		drv = newDriver(t, name, options)
++	} else {
++		drv.refCount++
++	}
++	return drv
++}
++
++// PutDriver removes the driver if it is no longer used and updates the reference count.
++func PutDriver(t testing.TB) {
++	if drv == nil {
++		t.Skip("No driver to put!")
++	}
++	drv.refCount--
++	if drv.refCount == 0 {
++		cleanup(t, drv)
++		drv = nil
++	}
++}
++
++// DriverTestCreateEmpty creates a new image and verifies it is empty and the right metadata
++func DriverTestCreateEmpty(t testing.TB, drivername string, driverOptions ...string) {
++	driver := GetDriver(t, drivername, driverOptions...)
++	defer PutDriver(t)
++
++	err := driver.Create("empty", "", nil)
++	require.NoError(t, err)
++
++	defer func() {
++		require.NoError(t, driver.Remove("empty"))
++	}()
++
++	if !driver.Exists("empty") {
++		t.Fatal("Newly created image doesn't exist")
++	}
++
++	dir, err := driver.Get("empty", graphdriver.MountOpts{})
++	require.NoError(t, err)
++
++	verifyFile(t, dir, 0755|os.ModeDir, 0, 0)
++
++	// Verify that the directory is empty
++	fis, err := readDir(dir)
++	require.NoError(t, err)
++	assert.Len(t, fis, 0)
++
++	driver.Put("empty")
++}
++
++// DriverTestCreateBase create a base driver and verify.
++func DriverTestCreateBase(t testing.TB, drivername string, driverOptions ...string) {
++	driver := GetDriver(t, drivername, driverOptions...)
++	defer PutDriver(t)
++
++	createBase(t, driver, "Base")
++	defer func() {
++		require.NoError(t, driver.Remove("Base"))
++	}()
++	verifyBase(t, driver, "Base")
++}
++
++// DriverTestCreateSnap Create a driver and snap and verify.
++func DriverTestCreateSnap(t testing.TB, drivername string, driverOptions ...string) {
++	driver := GetDriver(t, drivername, driverOptions...)
++	defer PutDriver(t)
++
++	createBase(t, driver, "Base")
++	defer func() {
++		require.NoError(t, driver.Remove("Base"))
++	}()
++
++	err := driver.Create("Snap", "Base", nil)
++	require.NoError(t, err)
++	defer func() {
++		require.NoError(t, driver.Remove("Snap"))
++	}()
++
++	verifyBase(t, driver, "Snap")
++}
++
++// DriverTestDeepLayerRead reads a file from a lower layer under a given number of layers
++func DriverTestDeepLayerRead(t testing.TB, layerCount int, drivername string, driverOptions ...string) {
++	driver := GetDriver(t, drivername, driverOptions...)
++	defer PutDriver(t)
++
++	base := stringid.GenerateRandomID()
++	if err := driver.Create(base, "", nil); err != nil {
++		t.Fatal(err)
++	}
++
++	content := []byte("test content")
++	if err := addFile(driver, base, "testfile.txt", content); err != nil {
++		t.Fatal(err)
++	}
++
++	topLayer, err := addManyLayers(driver, base, layerCount)
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	err = checkManyLayers(driver, topLayer, layerCount)
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	if err := checkFile(driver, topLayer, "testfile.txt", content); err != nil {
++		t.Fatal(err)
++	}
++}
++
++// DriverTestDiffApply tests diffing and applying produces the same layer
++func DriverTestDiffApply(t testing.TB, fileCount int, drivername string, driverOptions ...string) {
++	driver := GetDriver(t, drivername, driverOptions...)
++	defer PutDriver(t)
++	base := stringid.GenerateRandomID()
++	upper := stringid.GenerateRandomID()
++	deleteFile := "file-remove.txt"
++	deleteFileContent := []byte("This file should get removed in upper!")
++	deleteDir := "var/lib"
++
++	if err := driver.Create(base, "", nil); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := addManyFiles(driver, base, fileCount, 3); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := addFile(driver, base, deleteFile, deleteFileContent); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := addDirectory(driver, base, deleteDir); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := driver.Create(upper, base, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := addManyFiles(driver, upper, fileCount, 6); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := removeAll(driver, upper, deleteFile, deleteDir); err != nil {
++		t.Fatal(err)
++	}
++
++	diffSize, err := driver.DiffSize(upper, nil, "", nil, "")
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	diff := stringid.GenerateRandomID()
++	if err := driver.Create(diff, base, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := checkManyFiles(driver, diff, fileCount, 3); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := checkFile(driver, diff, deleteFile, deleteFileContent); err != nil {
++		t.Fatal(err)
++	}
++
++	arch, err := driver.Diff(upper, nil, base, nil, "")
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	buf := bytes.NewBuffer(nil)
++	if _, err := buf.ReadFrom(arch); err != nil {
++		t.Fatal(err)
++	}
++	if err := arch.Close(); err != nil {
++		t.Fatal(err)
++	}
++
++	applyDiffSize, err := driver.ApplyDiff(diff, nil, base, "", bytes.NewReader(buf.Bytes()))
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	if applyDiffSize != diffSize {
++		t.Fatalf("Apply diff size different, got %d, expected %d", applyDiffSize, diffSize)
++	}
++
++	if err := checkManyFiles(driver, diff, fileCount, 6); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := checkFileRemoved(driver, diff, deleteFile); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := checkFileRemoved(driver, diff, deleteDir); err != nil {
++		t.Fatal(err)
++	}
++}
++
++// DriverTestChanges tests computed changes on a layer matches changes made
++func DriverTestChanges(t testing.TB, drivername string, driverOptions ...string) {
++	driver := GetDriver(t, drivername, driverOptions...)
++	defer PutDriver(t)
++	base := stringid.GenerateRandomID()
++	upper := stringid.GenerateRandomID()
++	if err := driver.Create(base, "", nil); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := addManyFiles(driver, base, 20, 3); err != nil {
++		t.Fatal(err)
++	}
++
++	if err := driver.Create(upper, base, nil); err != nil {
++		t.Fatal(err)
++	}
++
++	expectedChanges, err := changeManyFiles(driver, upper, 20, 6)
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	changes, err := driver.Changes(upper, nil, base, nil, "")
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	if err = checkChanges(expectedChanges, changes); err != nil {
++		t.Fatal(err)
++	}
++}
++
++func writeRandomFile(path string, size uint64) error {
++	buf := make([]int64, size/8)
++
++	r := rand.NewSource(0)
++	for i := range buf {
++		buf[i] = r.Int63()
++	}
++
++	// Cast to []byte
++	header := *(*reflect.SliceHeader)(unsafe.Pointer(&buf))
++	header.Len *= 8
++	header.Cap *= 8
++	data := *(*[]byte)(unsafe.Pointer(&header))
++
++	return ioutil.WriteFile(path, data, 0700)
++}
++
++// DriverTestSetQuota Create a driver and test setting quota.
++func DriverTestSetQuota(t *testing.T, drivername string) {
++	driver := GetDriver(t, drivername)
++	defer PutDriver(t)
++
++	createBase(t, driver, "Base")
++	createOpts := &graphdriver.CreateOpts{}
++	createOpts.StorageOpt = make(map[string]string, 1)
++	createOpts.StorageOpt["size"] = "50M"
++	if err := driver.Create("zfsTest", "Base", createOpts); err != nil {
++		t.Fatal(err)
++	}
++
++	mountPath, err := driver.Get("zfsTest", graphdriver.MountOpts{})
++	if err != nil {
++		t.Fatal(err)
++	}
++
++	quota := uint64(50 * units.MiB)
++	err = writeRandomFile(path.Join(mountPath, "file"), quota*2)
++	if pathError, ok := err.(*os.PathError); ok && pathError.Err != unix.EDQUOT {
++		t.Fatalf("expect write() to fail with %v, got %v", unix.EDQUOT, err)
++	}
++
++}
++
++// DriverTestEcho tests that we can diff a layer correctly, focusing on trouble spots that NaiveDiff doesn't have
++func DriverTestEcho(t testing.TB, drivername string, driverOptions ...string) {
++	driver := GetDriver(t, drivername, driverOptions...)
++	defer PutDriver(t)
++	var err error
++	var root string
++	components := 10
++
++	for depth := 0; depth < components; depth++ {
++		base := stringid.GenerateRandomID()
++		second := stringid.GenerateRandomID()
++		third := stringid.GenerateRandomID()
++
++		if err := driver.Create(base, "", nil); err != nil {
++			t.Fatal(err)
++		}
++
++		if root, err = driver.Get(base, graphdriver.MountOpts{}); err != nil {
++			t.Fatal(err)
++		}
++
++		paths := []string{}
++		path := "/"
++		expectedChanges := []archive.Change{}
++		for i := 0; i < components-1; i++ {
++			path = filepath.Join(path, fmt.Sprintf("subdir%d", i+1))
++			paths = append(paths, path)
++			if err = os.Mkdir(filepath.Join(root, path), 0700); err != nil {
++				t.Fatal(err)
++			}
++			expectedChanges = append(expectedChanges, archive.Change{Kind: archive.ChangeAdd, Path: path})
++		}
++		path = filepath.Join(path, "file")
++		paths = append(paths, path)
++		if err = ioutil.WriteFile(filepath.Join(root, path), randomContent(128, int64(depth)), 0600); err != nil {
++			t.Fatal(err)
++		}
++		expectedChanges = append(expectedChanges, archive.Change{Kind: archive.ChangeAdd, Path: path})
++
++		changes, err := driver.Changes(base, nil, "", nil, "")
++		if err != nil {
++			t.Fatal(err)
++		}
++
++		if err = checkChanges(expectedChanges, changes); err != nil {
++			t.Fatal(err)
++		}
++
++		if err := driver.Create(second, base, nil); err != nil {
++			t.Fatal(err)
++		}
++
++		if root, err = driver.Get(second, graphdriver.MountOpts{}); err != nil {
++			t.Fatal(err)
++		}
++
++		if err = os.RemoveAll(filepath.Join(root, paths[depth])); err != nil {
++			t.Fatal(err)
++		}
++		expectedChanges = []archive.Change{}
++		for i := 0; i < depth; i++ {
++			expectedChanges = append(expectedChanges, archive.Change{Kind: archive.ChangeModify, Path: paths[i]})
++		}
++		expectedChanges = append(expectedChanges, archive.Change{Kind: archive.ChangeDelete, Path: paths[depth]})
++
++		changes, err = driver.Changes(second, nil, base, nil, "")
++		if err != nil {
++			t.Fatal(err)
++		}
++
++		if err = checkChanges(expectedChanges, changes); err != nil {
++			t.Fatal(err)
++		}
++
++		if err = driver.Create(third, second, nil); err != nil {
++			t.Fatal(err)
++		}
++
++		if root, err = driver.Get(third, graphdriver.MountOpts{}); err != nil {
++			t.Fatal(err)
++		}
++
++		expectedChanges = []archive.Change{}
++		for i := 0; i < depth; i++ {
++			expectedChanges = append(expectedChanges, archive.Change{Kind: archive.ChangeModify, Path: paths[i]})
++		}
++		for i := depth; i < components-1; i++ {
++			if err = os.Mkdir(filepath.Join(root, paths[i]), 0700); err != nil {
++				t.Fatal(err)
++			}
++			expectedChanges = append(expectedChanges, archive.Change{Kind: archive.ChangeAdd, Path: paths[i]})
++		}
++		if err = ioutil.WriteFile(filepath.Join(root, paths[len(paths)-1]), randomContent(128, int64(depth)), 0600); err != nil {
++			t.Fatal(err)
++		}
++		expectedChanges = append(expectedChanges, archive.Change{Kind: archive.ChangeAdd, Path: paths[len(paths)-1]})
++
++		changes, err = driver.Changes(third, nil, second, nil, "")
++		if err != nil {
++			t.Fatal(err)
++		}
++
++		if err = checkChanges(expectedChanges, changes); err != nil {
++			t.Fatal(err)
++		}
++
++		err = driver.Put(third)
++		if err != nil {
++			t.Fatal(err)
++		}
++		err = driver.Put(second)
++		if err != nil {
++			t.Fatal(err)
++		}
++		err = driver.Put(base)
++		if err != nil {
++			t.Fatal(err)
++		}
++	}
++}
+diff --git a/vendor/github.com/containers/storage/drivers/graphtest/testutil.go b/vendor/github.com/containers/storage/drivers/graphtest/testutil.go
+new file mode 100644
+index 0000000..3ab7541
+--- /dev/null
++++ b/vendor/github.com/containers/storage/drivers/graphtest/testutil.go
+@@ -0,0 +1,351 @@
++package graphtest
++
++import (
++	"bytes"
++	"fmt"
++	"io/ioutil"
++	"math/rand"
++	"os"
++	"path"
++	"sort"
++
++	graphdriver "github.com/containers/storage/drivers"
++	"github.com/containers/storage/pkg/archive"
++	"github.com/containers/storage/pkg/stringid"
++)
++
++func randomContent(size int, seed int64) []byte {
++	s := rand.NewSource(seed)
++	content := make([]byte, size)
++
++	for i := 0; i < len(content); i += 7 {
++		val := s.Int63()
++		for j := 0; i+j < len(content) && j < 7; j++ {
++			content[i+j] = byte(val)
++			val >>= 8
++		}
++	}
++
++	return content
++}
++
++func addFiles(drv graphdriver.Driver, layer string, seed int64) error {
++	root, err := drv.Get(layer, graphdriver.MountOpts{})
++	if err != nil {
++		return err
++	}
++	defer drv.Put(layer)
++
++	if err := ioutil.WriteFile(path.Join(root, "file-a"), randomContent(64, seed), 0755); err != nil {
++		return err
++	}
++	if err := os.MkdirAll(path.Join(root, "dir-b"), 0755); err != nil {
++		return err
++	}
++	if err := ioutil.WriteFile(path.Join(root, "dir-b", "file-b"), randomContent(128, seed+1), 0755); err != nil {
++		return err
++	}
++
++	return ioutil.WriteFile(path.Join(root, "file-c"), randomContent(128*128, seed+2), 0755)
++}
++
++func checkFile(drv graphdriver.Driver, layer, filename string, content []byte) error {
++	root, err := drv.Get(layer, graphdriver.MountOpts{})
++	if err != nil {
++		return err
++	}
++	defer drv.Put(layer)
++
++	fileContent, err := ioutil.ReadFile(path.Join(root, filename))
++	if err != nil {
++		return err
++	}
++
++	if bytes.Compare(fileContent, content) != 0 {
++		return fmt.Errorf("mismatched file content %v, expecting %v", fileContent, content)
++	}
++
++	return nil
++}
++
++func addFile(drv graphdriver.Driver, layer, filename string, content []byte) error {
++	root, err := drv.Get(layer, graphdriver.MountOpts{})
++	if err != nil {
++		return err
++	}
++	defer drv.Put(layer)
++
++	return ioutil.WriteFile(path.Join(root, filename), content, 0755)
++}
++
++func addDirectory(drv graphdriver.Driver, layer, dir string) error {
++	root, err := drv.Get(layer, graphdriver.MountOpts{})
++	if err != nil {
++		return err
++	}
++	defer drv.Put(layer)
++
++	return os.MkdirAll(path.Join(root, dir), 0755)
++}
++
++func removeAll(drv graphdriver.Driver, layer string, names ...string) error {
++	root, err := drv.Get(layer, graphdriver.MountOpts{})
++	if err != nil {
++		return err
++	}
++	defer drv.Put(layer)
++
++	for _, filename := range names {
++		if err := os.RemoveAll(path.Join(root, filename)); err != nil {
++			return err
++		}
++	}
++	return nil
++}
++
++func checkFileRemoved(drv graphdriver.Driver, layer, filename string) error {
++	root, err := drv.Get(layer, graphdriver.MountOpts{})
++	if err != nil {
++		return err
++	}
++	defer drv.Put(layer)
++
++	if _, err := os.Stat(path.Join(root, filename)); err == nil {
++		return fmt.Errorf("file still exists: %s", path.Join(root, filename))
++	} else if !os.IsNotExist(err) {
++		return err
++	}
++
++	return nil
++}
++
++func addManyFiles(drv graphdriver.Driver, layer string, count int, seed int64) error {
++	root, err := drv.Get(layer, graphdriver.MountOpts{})
++	if err != nil {
++		return err
++	}
++	defer drv.Put(layer)
++
++	for i := 0; i < count; i += 100 {
++		dir := path.Join(root, fmt.Sprintf("directory-%d", i))
++		if err := os.MkdirAll(dir, 0755); err != nil {
++			return err
++		}
++		for j := 0; i+j < count && j < 100; j++ {
++			file := path.Join(dir, fmt.Sprintf("file-%d", i+j))
++			if err := ioutil.WriteFile(file, randomContent(64, seed+int64(i+j)), 0755); err != nil {
++				return err
++			}
++		}
++	}
++
++	return nil
++}
++
++func changeManyFiles(drv graphdriver.Driver, layer string, count int, seed int64) ([]archive.Change, error) {
++	root, err := drv.Get(layer, graphdriver.MountOpts{})
++	if err != nil {
++		return nil, err
++	}
++	defer drv.Put(layer)
++
++	changes := []archive.Change{}
++	for i := 0; i < count; i += 100 {
++		archiveRoot := fmt.Sprintf("/directory-%d", i)
++		if err := os.MkdirAll(path.Join(root, archiveRoot), 0755); err != nil {
++			return nil, err
++		}
++		for j := 0; i+j < count && j < 100; j++ {
++			if j == 0 {
++				changes = append(changes, archive.Change{
++					Path: archiveRoot,
++					Kind: archive.ChangeModify,
++				})
++			}
++			var change archive.Change
++			switch j % 3 {
++			// Update file
++			case 0:
++				var originalFileInfo, updatedFileInfo os.FileInfo
++				change.Path = path.Join(archiveRoot, fmt.Sprintf("file-%d", i+j))
++				change.Kind = archive.ChangeModify
++				if originalFileInfo, err = os.Stat(path.Join(root, change.Path)); err != nil {
++					return nil, err
++				}
++				for updatedFileInfo == nil || updatedFileInfo.ModTime().Equal(originalFileInfo.ModTime()) {
++					if err := ioutil.WriteFile(path.Join(root, change.Path), randomContent(64, seed+int64(i+j)), 0755); err != nil {
++						return nil, err
++					}
++					if updatedFileInfo, err = os.Stat(path.Join(root, change.Path)); err != nil {
++						return nil, err
++					}
++				}
++			// Add file
++			case 1:
++				change.Path = path.Join(archiveRoot, fmt.Sprintf("file-%d-%d", seed, i+j))
++				change.Kind = archive.ChangeAdd
++				if err := ioutil.WriteFile(path.Join(root, change.Path), randomContent(64, seed+int64(i+j)), 0755); err != nil {
++					return nil, err
++				}
++			// Remove file
++			case 2:
++				change.Path = path.Join(archiveRoot, fmt.Sprintf("file-%d", i+j))
++				change.Kind = archive.ChangeDelete
++				if err := os.Remove(path.Join(root, change.Path)); err != nil {
++					return nil, err
++				}
++			}
++			changes = append(changes, change)
++		}
++	}
++
++	return changes, nil
++}
++
++func checkManyFiles(drv graphdriver.Driver, layer string, count int, seed int64) error {
++	root, err := drv.Get(layer, graphdriver.MountOpts{})
++	if err != nil {
++		return err
++	}
++	defer drv.Put(layer)
++
++	for i := 0; i < count; i += 100 {
++		dir := path.Join(root, fmt.Sprintf("directory-%d", i))
++		for j := 0; i+j < count && j < 100; j++ {
++			file := path.Join(dir, fmt.Sprintf("file-%d", i+j))
++			fileContent, err := ioutil.ReadFile(file)
++			if err != nil {
++				return err
++			}
++
++			content := randomContent(64, seed+int64(i+j))
++
++			if bytes.Compare(fileContent, content) != 0 {
++				return fmt.Errorf("mismatched file content %v, expecting %v", fileContent, content)
++			}
++		}
++	}
++
++	return nil
++}
++
++type changeList []archive.Change
++
++func (c changeList) Less(i, j int) bool {
++	if c[i].Path == c[j].Path {
++		return c[i].Kind < c[j].Kind
++	}
++	return c[i].Path < c[j].Path
++}
++func (c changeList) Len() int      { return len(c) }
++func (c changeList) Swap(i, j int) { c[j], c[i] = c[i], c[j] }
++
++func checkChanges(expected, actual []archive.Change) error {
++	if len(expected) != len(actual) {
++		return fmt.Errorf("unexpected number of changes, expected %d, got %d", len(expected), len(actual))
++	}
++	sort.Sort(changeList(expected))
++	sort.Sort(changeList(actual))
++
++	for i := range expected {
++		if expected[i] != actual[i] {
++			return fmt.Errorf("unexpected change, expecting %v, got %v", expected[i], actual[i])
++		}
++	}
++
++	return nil
++}
++
++func addLayerFiles(drv graphdriver.Driver, layer, parent string, i int) error {
++	root, err := drv.Get(layer, graphdriver.MountOpts{})
++	if err != nil {
++		return err
++	}
++	defer drv.Put(layer)
++
++	if err := ioutil.WriteFile(path.Join(root, "top-id"), []byte(layer), 0755); err != nil {
++		return err
++	}
++	layerDir := path.Join(root, fmt.Sprintf("layer-%d", i))
++	if err := os.MkdirAll(layerDir, 0755); err != nil {
++		return err
++	}
++	if err := ioutil.WriteFile(path.Join(layerDir, "layer-id"), []byte(layer), 0755); err != nil {
++		return err
++	}
++	if err := ioutil.WriteFile(path.Join(layerDir, "parent-id"), []byte(parent), 0755); err != nil {
++		return err
++	}
++
++	return nil
++}
++
++func addManyLayers(drv graphdriver.Driver, baseLayer string, count int) (string, error) {
++	lastLayer := baseLayer
++	for i := 1; i <= count; i++ {
++		nextLayer := stringid.GenerateRandomID()
++		if err := drv.Create(nextLayer, lastLayer, nil); err != nil {
++			return "", err
++		}
++		if err := addLayerFiles(drv, nextLayer, lastLayer, i); err != nil {
++			return "", err
++		}
++
++		lastLayer = nextLayer
++
++	}
++	return lastLayer, nil
++}
++
++func checkManyLayers(drv graphdriver.Driver, layer string, count int) error {
++	root, err := drv.Get(layer, graphdriver.MountOpts{})
++	if err != nil {
++		return err
++	}
++	defer drv.Put(layer)
++
++	layerIDBytes, err := ioutil.ReadFile(path.Join(root, "top-id"))
++	if err != nil {
++		return err
++	}
++
++	if bytes.Compare(layerIDBytes, []byte(layer)) != 0 {
++		return fmt.Errorf("mismatched file content %v, expecting %v", layerIDBytes, []byte(layer))
++	}
++
++	for i := count; i > 0; i-- {
++		layerDir := path.Join(root, fmt.Sprintf("layer-%d", i))
++
++		thisLayerIDBytes, err := ioutil.ReadFile(path.Join(layerDir, "layer-id"))
++		if err != nil {
++			return err
++		}
++		if bytes.Compare(thisLayerIDBytes, layerIDBytes) != 0 {
++			return fmt.Errorf("mismatched file content %v, expecting %v", thisLayerIDBytes, layerIDBytes)
++		}
++		layerIDBytes, err = ioutil.ReadFile(path.Join(layerDir, "parent-id"))
++		if err != nil {
++			return err
++		}
++	}
++	return nil
++}
++
++// readDir reads a directory just like ioutil.ReadDir()
++// then hides specific files (currently "lost+found")
++// so the tests don't "see" it
++func readDir(dir string) ([]os.FileInfo, error) {
++	a, err := ioutil.ReadDir(dir)
++	if err != nil {
++		return nil, err
++	}
++
++	b := a[:0]
++	for _, x := range a {
++		if x.Name() != "lost+found" { // ext4 always have this dir
++			b = append(b, x)
++		}
++	}
++
++	return b, nil
++}
+diff --git a/vendor/github.com/containers/storage/drivers/graphtest/testutil_unix.go b/vendor/github.com/containers/storage/drivers/graphtest/testutil_unix.go
+new file mode 100644
+index 0000000..dd5090a
+--- /dev/null
++++ b/vendor/github.com/containers/storage/drivers/graphtest/testutil_unix.go
+@@ -0,0 +1,70 @@
++// +build linux freebsd
++
++package graphtest
++
++import (
++	"io/ioutil"
++	"os"
++	"path"
++	"syscall"
++	"testing"
++
++	graphdriver "github.com/containers/storage/drivers"
++	"github.com/stretchr/testify/assert"
++	"github.com/stretchr/testify/require"
++	"golang.org/x/sys/unix"
++)
++
++func verifyFile(t testing.TB, path string, mode os.FileMode, uid, gid uint32) {
++	fi, err := os.Stat(path)
++	require.NoError(t, err)
++
++	actual := fi.Mode()
++	assert.Equal(t, mode&os.ModeType, actual&os.ModeType, path)
++	assert.Equal(t, mode&os.ModePerm, actual&os.ModePerm, path)
++	assert.Equal(t, mode&os.ModeSticky, actual&os.ModeSticky, path)
++	assert.Equal(t, mode&os.ModeSetuid, actual&os.ModeSetuid, path)
++	assert.Equal(t, mode&os.ModeSetgid, actual&os.ModeSetgid, path)
++
++	if stat, ok := fi.Sys().(*syscall.Stat_t); ok {
++		assert.Equal(t, uid, stat.Uid, path)
++		assert.Equal(t, gid, stat.Gid, path)
++	}
++}
++
++func createBase(t testing.TB, driver graphdriver.Driver, name string) {
++	// We need to be able to set any perms
++	oldmask := unix.Umask(0)
++	defer unix.Umask(oldmask)
++
++	err := driver.CreateReadWrite(name, "", nil)
++	require.NoError(t, err)
++
++	dir, err := driver.Get(name, graphdriver.MountOpts{})
++	require.NoError(t, err)
++	defer driver.Put(name)
++
++	subdir := path.Join(dir, "a subdir")
++	require.NoError(t, os.Mkdir(subdir, 0705|os.ModeSticky))
++	require.NoError(t, os.Chown(subdir, 1, 2))
++
++	file := path.Join(dir, "a file")
++	err = ioutil.WriteFile(file, []byte("Some data"), 0222|os.ModeSetuid)
++	require.NoError(t, err)
++}
++
++func verifyBase(t testing.TB, driver graphdriver.Driver, name string) {
++	dir, err := driver.Get(name, graphdriver.MountOpts{})
++	require.NoError(t, err)
++	defer driver.Put(name)
++
++	subdir := path.Join(dir, "a subdir")
++	verifyFile(t, subdir, 0705|os.ModeDir|os.ModeSticky, 1, 2)
++
++	file := path.Join(dir, "a file")
++	verifyFile(t, file, 0222|os.ModeSetuid, 0, 0)
++
++	files, err := readDir(dir)
++	require.NoError(t, err)
++	assert.Len(t, files, 2)
++}
+-- 
+2.19.1
+
