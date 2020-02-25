@@ -1,7 +1,7 @@
-From 4a0da2c2f2b44cb63c8e87f565f5fe886d690e4f Mon Sep 17 00:00:00 2001
+From a64da0b20f3aacdcddc96b72a399092c875bfbcc Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Mon, 10 Jun 2019 09:41:44 -0400
-Subject: [PATCH 21/40] set layer MountCount = 0 without mount point file
+Subject: [PATCH 21/41] set layer MountCount = 0 without mount point file
 
 Signed-off-by: LiFeng <lifeng68@huawei.com>
 ---

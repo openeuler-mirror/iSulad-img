@@ -1,0 +1,36 @@
+From ac4895d6aad37a0f7a3850f17eb1855cd6646ab0 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Tue, 25 Feb 2020 16:56:55 +0800
+Subject: [PATCH 41/41] Fix testcase TestDevmapperCreateEmpty failed if umask
+ is 0077
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../containers/storage/drivers/graphtest/graphtest_unix.go    | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/vendor/github.com/containers/storage/drivers/graphtest/graphtest_unix.go b/vendor/github.com/containers/storage/drivers/graphtest/graphtest_unix.go
+index 83e026c..1c44dde 100644
+--- a/vendor/github.com/containers/storage/drivers/graphtest/graphtest_unix.go
++++ b/vendor/github.com/containers/storage/drivers/graphtest/graphtest_unix.go
+@@ -11,6 +11,7 @@ import (
+ 	"path"
+ 	"path/filepath"
+ 	"reflect"
++	"syscall"
+ 	"testing"
+ 	"unsafe"
+ 
+@@ -88,6 +89,9 @@ func DriverTestCreateEmpty(t testing.TB, drivername string, driverOptions ...str
+ 	driver := GetDriver(t, drivername, driverOptions...)
+ 	defer PutDriver(t)
+ 
++	umask := syscall.Umask(0022)
++	defer syscall.Umask(umask)
++
+ 	err := driver.Create("empty", "", nil)
+ 	require.NoError(t, err)
+ 
+-- 
+2.19.1
+
