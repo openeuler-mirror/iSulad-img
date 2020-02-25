@@ -1,7 +1,7 @@
-From c82e00ca50f7eb64da9c35e43bcf6f747908b123 Mon Sep 17 00:00:00 2001
+From e1c3dd40fc80b72935489ef2eea5d6222a8cf774 Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Mon, 18 Nov 2019 21:20:52 -0500
-Subject: [PATCH 30/40] Support load multiple images
+Subject: [PATCH 30/41] Support load multiple images
 
 Signed-off-by: WangFengTu <wangfengtu@huawei.com>
 ---

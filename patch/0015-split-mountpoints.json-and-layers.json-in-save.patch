@@ -1,7 +1,7 @@
-From ecdf8da1df0a70c0ceeb83cb6e757c1e3ca67f22 Mon Sep 17 00:00:00 2001
+From 546a5a6ec465fbe38edd4291bfa0b562958c3095 Mon Sep 17 00:00:00 2001
 From: LiFeng <lifeng68@huawei.com>
 Date: Mon, 13 May 2019 04:58:15 -0400
-Subject: [PATCH 15/40] split mountpoints.json and layers.json in save
+Subject: [PATCH 15/41] split mountpoints.json and layers.json in save
 
 Signed-off-by: LiFeng <lifeng68@huawei.com>
 ---
