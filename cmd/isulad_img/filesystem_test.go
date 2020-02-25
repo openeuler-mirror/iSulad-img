@@ -1,4 +1,4 @@
-// Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
+// Copyright (c) Huawei Technologies Co., Ltd. 2020. All rights reserved.
 // iSulad-img licensed under the Mulan PSL v1.
 // You can use this software according to the terms and conditions of the Mulan PSL v1.
 // You may obtain a copy of Mulan PSL v1 at:
@@ -8,12 +8,19 @@
 // PURPOSE.
 // See the Mulan PSL v1 for more details.
 // Description: iSulad image kit
-// Author: lifeng
-// Create: 2019-05-06
-
-// +build !containers_image_openpgp
+// Author: wangfengtu
+// Create: 2020-02-25
 
 package main
 
-// #cgo LDFLAGS: -lgpgme
-import "C"
+import (
+	"testing"
+)
+
+func TestGetDiskUsageStats(t *testing.T) {
+	// Make sure it do not panic
+	_, _, err := GetDiskUsageStats("/proc")
+	if err != nil {
+		t.Errorf("GetDiskUsageStats failed: %v", err)
+	}
+}

@@ -65,13 +65,24 @@ static: link
 unit-test: link
 	echo $(GOPATH)
 	echo $(CURDIR)
-	go test -v github.com/containers/storage/drivers/devmapper
+	rm -rf $(CURDIR)/src/isula-image
+	mkdir -p $(CURDIR)/src/isula-image/cmd
+	cp -rf $(CURDIR)/cmd/isulad_img $(CURDIR)/src/isula-image/cmd/
+	cp -rf $(CURDIR)/isula $(CURDIR)/src/isula-image/
+	mkdir -p ${GOTMPDIR}
+	$(GPGME_ENV) go test ${GO_DYN_FLAGS} -ldflags "-extldflags -zrelro -extldflags -znow -tmpdir ${GOTMPDIR} -X main.gitCommit=${GIT_COMMIT}" -gcflags "$(GOGCFLAGS)" -tags "$(BUILDTAGS)" -v -coverpkg=github.com/containers/storage/drivers/devmapper github.com/containers/storage/drivers/devmapper
+	$(GPGME_ENV) go test ${GO_DYN_FLAGS} -ldflags "-extldflags -zrelro -extldflags -znow -tmpdir ${GOTMPDIR} -X main.gitCommit=${GIT_COMMIT}" -gcflags "$(GOGCFLAGS)" -tags "$(BUILDTAGS)" -v -coverpkg=isula-image/cmd/isulad_img isula-image/cmd/isulad_img
+	rm -rf ${GOTMPDIR}
+	rm -rf $(CURDIR)/src/isula-image
+	rm -f $(CURDIR)/src
 
 proto:
 	protoc --go_out=plugins=grpc:. ./isula/isula_image.proto
 
 clean:
 	rm -rf ${ISULAD_KIT_BIN}
+	rm -rf $(CURDIR)/src/isula-image
+	rm -f $(CURDIR)/src
 
 install:
 	install -d -m 755 ${INSTALLDIR}
