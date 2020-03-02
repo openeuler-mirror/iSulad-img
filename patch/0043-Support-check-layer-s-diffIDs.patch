@@ -1,0 +1,150 @@
+From d735621e9ceb7506d408d8e5a1a0d58bde9e22c4 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Mon, 13 Jan 2020 08:50:55 -0500
+Subject: [PATCH 43/43] Support check layer's diffIDs
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../github.com/containers/image/copy/copy.go  | 83 +++++++++++++++----
+ 1 file changed, 65 insertions(+), 18 deletions(-)
+
+diff --git a/vendor/github.com/containers/image/copy/copy.go b/vendor/github.com/containers/image/copy/copy.go
+index 89c7e58..4d75b65 100644
+--- a/vendor/github.com/containers/image/copy/copy.go
++++ b/vendor/github.com/containers/image/copy/copy.go
+@@ -3,6 +3,7 @@ package copy
+ import (
+ 	"bytes"
+ 	"context"
++	"encoding/json"
+ 	"fmt"
+ 	"io"
+ 	"io/ioutil"
+@@ -13,6 +14,7 @@ import (
+ 	"time"
+ 
+ 	"github.com/containers/image/image"
++	"github.com/containers/image/manifest"
+ 	"github.com/containers/image/pkg/blobinfocache"
+ 	"github.com/containers/image/pkg/compression"
+ 	"github.com/containers/image/signature"
+@@ -95,6 +97,7 @@ type imageCopier struct {
+ 	c                  *copier
+ 	manifestUpdates    *types.ManifestUpdateOptions
+ 	src                types.Image
++	diffIDs            []digest.Digest
+ 	diffIDsAreNeeded   bool
+ 	canModifyManifest  bool
+ 	canSubstituteBlobs bool
+@@ -323,6 +326,10 @@ func (c *copier) copyOneImage(ctx context.Context, policyContext *signature.Poli
+ 		}
+ 	}
+ 
++	if err := ic.checkLayersDiffIDs(ctx); err != nil {
++		return nil, err
++	}
++
+ 	if options.SignBy != "" {
+ 		newSig, err := c.createSignature(manifest, options.SignBy)
+ 		if err != nil {
+@@ -368,6 +375,46 @@ func checkImageDestinationForCurrentRuntimeOS(ctx context.Context, sys *types.Sy
+ 	return nil
+ }
+ 
++func (ic *imageCopier) checkLayersDiffIDs(ctx context.Context) error {
++	configBytes, err := ic.src.ConfigBlob(ctx)
++	if err != nil {
++		return errors.Wrap(err, "Error getting config blob when checking layer's diffIDs")
++	}
++
++	var config manifest.Schema2Image
++	if err := json.Unmarshal(configBytes, &config); err != nil {
++		return errors.Wrapf(err, "Error decoding config %s", string(configBytes))
++	}
++
++	configDiffIDs := config.RootFS.DiffIDs
++	gotDiffIDs := ic.diffIDs
++
++	errMsg := errors.New("layers from manifest don't match image configuration")
++	if len(configDiffIDs) != len(gotDiffIDs) {
++		err = errors.Wrapf(errMsg, "config layer number do not match pulled/loaded layer number. config %v got %v",
++			len(configDiffIDs), len(gotDiffIDs))
++	} else {
++		for i := range configDiffIDs {
++			if configDiffIDs[i] != gotDiffIDs[i] && gotDiffIDs[i] != "" {
++				err = errors.Wrapf(errMsg, "config layer do not match pulled/loaded layer.\nconfig:\n%v\npulled:\n%v",
++					configDiffIDs[i], gotDiffIDs[i])
++				break
++			}
++		}
++	}
++	if err != nil {
++		logrus.Errorf("config layers:\n%v\npulled/loaded layers:\n%v", configDiffIDs, gotDiffIDs)
++		manifestBytes, _, err2 := ic.src.Manifest(ctx)
++		if err2 != nil {
++			logrus.Errorf("try to get manifest data from storage failed: %v", err2)
++		} else {
++			logrus.Errorf("manifest:\n%v", string(manifestBytes))
++		}
++	}
++
++	return err
++}
++
+ // updateEmbeddedDockerReference handles the Docker reference embedded in Docker schema1 manifests.
+ func (ic *imageCopier) updateEmbeddedDockerReference() error {
+ 	if ic.c.dest.IgnoresEmbeddedDockerReference() {
+@@ -502,6 +549,7 @@ func (ic *imageCopier) copyLayers(ctx context.Context) error {
+ 	if ic.diffIDsAreNeeded {
+ 		ic.manifestUpdates.InformationOnly.LayerDiffIDs = diffIDs
+ 	}
++	ic.diffIDs = diffIDs
+ 	if srcInfosUpdated || layerDigestsDiffer(srcInfos, destInfos) {
+ 		ic.manifestUpdates.LayerInfos = destInfos
+ 	}
+@@ -650,25 +698,24 @@ func (ic *imageCopier) copyLayerFromStream(ctx context.Context, srcStream io.Rea
+ 	var diffIDChan chan diffIDResult
+ 
+ 	err := errors.New("Internal error: unexpected panic in copyLayer") // For pipeWriter.CloseWithError below
+-	if diffIDIsNeeded {
+-		diffIDChan = make(chan diffIDResult, 1) // Buffered, so that sending a value after this or our caller has failed and exited does not block.
+-		pipeReader, pipeWriter := io.Pipe()
+-		defer func() { // Note that this is not the same as {defer pipeWriter.CloseWithError(err)}; we need err to be evaluated lazily.
+-			pipeWriter.CloseWithError(err) // CloseWithError(nil) is equivalent to Close()
+-		}()
+-
+-		getDiffIDRecorder = func(decompressor compression.DecompressorFunc) io.Writer {
+-			// If this fails, e.g. because we have exited and due to pipeWriter.CloseWithError() above further
+-			// reading from the pipe has failed, we don’t really care.
+-			// We only read from diffIDChan if the rest of the flow has succeeded, and when we do read from it,
+-			// the return value includes an error indication, which we do check.
+-			//
+-			// If this gets never called, pipeReader will not be used anywhere, but pipeWriter will only be
+-			// closed above, so we are happy enough with both pipeReader and pipeWriter to just get collected by GC.
+-			go diffIDComputationGoroutine(diffIDChan, pipeReader, decompressor) // Closes pipeReader
+-			return pipeWriter
+-		}
++	diffIDChan = make(chan diffIDResult, 1)                            // Buffered, so that sending a value after this or our caller has failed and exited does not block.
++	pipeReader, pipeWriter := io.Pipe()
++	defer func() { // Note that this is not the same as {defer pipeWriter.CloseWithError(err)}; we need err to be evaluated lazily.
++		pipeWriter.CloseWithError(err) // CloseWithError(nil) is equivalent to Close()
++	}()
++
++	getDiffIDRecorder = func(decompressor compression.DecompressorFunc) io.Writer {
++		// If this fails, e.g. because we have exited and due to pipeWriter.CloseWithError() above further
++		// reading from the pipe has failed, we don’t really care.
++		// We only read from diffIDChan if the rest of the flow has succeeded, and when we do read from it,
++		// the return value includes an error indication, which we do check.
++		//
++		// If this gets never called, pipeReader will not be used anywhere, but pipeWriter will only be
++		// closed above, so we are happy enough with both pipeReader and pipeWriter to just get collected by GC.
++		go diffIDComputationGoroutine(diffIDChan, pipeReader, decompressor) // Closes pipeReader
++		return pipeWriter
+ 	}
++
+ 	blobInfo, err := ic.c.copyBlobFromStream(ctx, srcStream, srcInfo, getDiffIDRecorder, ic.canModifyManifest, false, bar) // Sets err to nil on success
+ 	return blobInfo, diffIDChan, err
+ 	// We need the defer … pipeWriter.CloseWithError() to happen HERE so that the caller can block on reading from diffIDChan
+-- 
+2.19.1
+

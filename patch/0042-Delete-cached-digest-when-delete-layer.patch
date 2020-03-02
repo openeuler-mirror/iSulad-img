@@ -1,0 +1,81 @@
+From ce55de258cbb029b5793c2e125c1696cd7feb7da Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Tue, 14 Jan 2020 22:16:25 -0500
+Subject: [PATCH 42/43] Delete cached digest when delete layer
+
+Delete cached digest when delete layer. If not deleted,
+load images with the same diffID will error out with message
+"Error writing blob: blob size mismatch".
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../github.com/containers/storage/layers.go   | 39 ++++++++++---------
+ 1 file changed, 21 insertions(+), 18 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index b03de66..31e5d69 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -1167,6 +1167,8 @@ func (r *layerStore) Delete(id string) error {
+ 	os.Remove(r.tspath(id))
+ 	delete(r.byid, id)
+ 	r.idindex.Delete(id)
++	updateDigestMap(&r.bycompressedsum, layer.CompressedDigest, "", id)
++	updateDigestMap(&r.byuncompressedsum, layer.UncompressedDigest, "", id)
+ 	mountLabel := layer.MountLabel
+ 	toDeleteIndex := -1
+ 	for i, candidate := range r.layers {
+@@ -1475,6 +1477,25 @@ func (r *layerStore) DiffSize(from, to string) (size int64, err error) {
+ 	return r.driver.DiffSize(to, r.layerMappings(toLayer), from, r.layerMappings(fromLayer), toLayer.MountLabel)
+ }
+ 
++func updateDigestMap(m *map[digest.Digest][]string, oldvalue, newvalue digest.Digest, id string) {
++	var newList []string
++	if oldvalue != "" {
++		for _, value := range (*m)[oldvalue] {
++			if value != id {
++				newList = append(newList, value)
++			}
++		}
++		if len(newList) > 0 {
++			(*m)[oldvalue] = newList
++		} else {
++			delete(*m, oldvalue)
++		}
++	}
++	if newvalue != "" {
++		(*m)[newvalue] = append((*m)[newvalue], id)
++	}
++}
++
+ func (r *layerStore) ApplyDiff(to string, diff io.Reader) (size int64, err error) {
+ 	if !r.IsReadWrite() {
+ 		return -1, errors.Wrapf(ErrStoreIsReadOnly, "not allowed to modify layer contents at %q", r.layerspath())
+@@ -1526,24 +1547,6 @@ func (r *layerStore) ApplyDiff(to string, diff io.Reader) (size int64, err error
+ 		}
+ 	}
+ 
+-	updateDigestMap := func(m *map[digest.Digest][]string, oldvalue, newvalue digest.Digest, id string) {
+-		var newList []string
+-		if oldvalue != "" {
+-			for _, value := range (*m)[oldvalue] {
+-				if value != id {
+-					newList = append(newList, value)
+-				}
+-			}
+-			if len(newList) > 0 {
+-				(*m)[oldvalue] = newList
+-			} else {
+-				delete(*m, oldvalue)
+-			}
+-		}
+-		if newvalue != "" {
+-			(*m)[newvalue] = append((*m)[newvalue], id)
+-		}
+-	}
+ 	updateDigestMap(&r.bycompressedsum, layer.CompressedDigest, compressedDigest.Digest(), layer.ID)
+ 	layer.CompressedDigest = compressedDigest.Digest()
+ 	layer.CompressedSize = compressedCounter.Count
+-- 
+2.19.1
+
