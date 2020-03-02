@@ -1,7 +1,7 @@
-From ddbf384a2e736c24d732559fc83aa90603fa80e2 Mon Sep 17 00:00:00 2001
+From e9f72ec64420ff81be2d284e9a33712cd963d8af Mon Sep 17 00:00:00 2001
 From: TanYiFeng <tanyifeng1@huawei.com>
 Date: Tue, 9 Apr 2019 01:32:27 -0400
-Subject: [PATCH 03/41] vendor: support setting rootfs quota
+Subject: [PATCH 03/43] vendor: support setting rootfs quota
 
 Signed-off-by: TanYiFeng <tanyifeng1@huawei.com>
 ---
