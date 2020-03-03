@@ -1,7 +1,7 @@
-From 712fa7afd37466c1e24ef8b1dfac39abdb49b638 Mon Sep 17 00:00:00 2001
+From 8346451ff989aa7e5c6aab39b7f5559fee1fa00e Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Sun, 19 Jan 2020 11:25:09 +0800
-Subject: [PATCH 38/43] Fix some devicemapper bugs
+Subject: [PATCH 38/44] Fix some devicemapper bugs
 
 Signed-off-by: WangFengTu <wangfengtu@huawei.com>
 ---

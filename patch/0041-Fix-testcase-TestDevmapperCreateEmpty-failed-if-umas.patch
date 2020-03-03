@@ -1,7 +1,7 @@
-From d76aad27ed1b5e8232f82a1e4e0ab96491fc70f7 Mon Sep 17 00:00:00 2001
+From 8a138a3a80f4dfb4c1b01fa88d3413237a81abba Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Tue, 25 Feb 2020 16:56:55 +0800
-Subject: [PATCH 41/43] Fix testcase TestDevmapperCreateEmpty failed if umask
+Subject: [PATCH 41/44] Fix testcase TestDevmapperCreateEmpty failed if umask
  is 0077
 
 Signed-off-by: WangFengTu <wangfengtu@huawei.com>
