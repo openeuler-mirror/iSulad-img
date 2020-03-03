@@ -1,7 +1,7 @@
-From ce55de258cbb029b5793c2e125c1696cd7feb7da Mon Sep 17 00:00:00 2001
+From c51a03434dfc3b0ab25f490980cf6b0860686949 Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Tue, 14 Jan 2020 22:16:25 -0500
-Subject: [PATCH 42/43] Delete cached digest when delete layer
+Subject: [PATCH 42/44] Delete cached digest when delete layer
 
 Delete cached digest when delete layer. If not deleted,
 load images with the same diffID will error out with message
