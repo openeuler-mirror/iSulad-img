@@ -1,5 +1,5 @@
 %global _version 1.0.12
-%global _release 20190809.172307.git763c5091
+%global _release 20200306.025155.git310b4fd3
 Name:       iSulad-img
 Version:    %{_version}
 Release:    %{_release}
