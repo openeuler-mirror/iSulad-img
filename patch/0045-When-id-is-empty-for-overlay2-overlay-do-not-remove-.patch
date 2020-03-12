@@ -1,0 +1,44 @@
+From a2fe9eca3561eff205c828bdbc6c504a4551b7cc Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Thu, 12 Mar 2020 14:17:11 +0800
+Subject: [PATCH 45/46] When id is empty for overlay2/overlay, do not remove
+ the directories.
+
+Signed-off-by: fanjiyun <fan.jiyun@zte.com.cn>
+Signed-off-by: Sebastiaan van Stijn <github@gone.nl>
+
+cherry-picked from github.com/moby/moby/pull/36161
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../containers/storage/drivers/overlay/overlay.go          | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+index 213acd1..d1f754c 100644
+--- a/vendor/github.com/containers/storage/drivers/overlay/overlay.go
++++ b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+@@ -678,6 +678,9 @@ func (d *Driver) optsAppendMappings(opts string, uidMaps, gidMaps []idtools.IDMa
+ 
+ // Remove cleans the directories that are created for this id.
+ func (d *Driver) Remove(id string) error {
++	if id == "" {
++		return fmt.Errorf("refusing to remove the directories: id is empty")
++	}
+ 	d.locker.Lock(id)
+ 	defer d.locker.Unlock(id)
+ 
+@@ -689,7 +692,9 @@ func (d *Driver) Remove(id string) error {
+ 	dir := d.dir(id)
+ 	lid, err := ioutil.ReadFile(path.Join(dir, "link"))
+ 	if err == nil {
+-		if err := os.RemoveAll(path.Join(d.home, linkDir, string(lid))); err != nil {
++		if len(lid) == 0 {
++			logrus.Errorf("refusing to remove empty link for layer %v", id)
++		} else if err := os.RemoveAll(path.Join(d.home, linkDir, string(lid))); err != nil {
+ 			logrus.Debugf("Failed to remove link: %v", err)
+ 		}
+ 	}
+-- 
+2.19.1
+

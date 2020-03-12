@@ -1,7 +1,7 @@
-From 928e215dde6840c9448816521131d23357e0e2c9 Mon Sep 17 00:00:00 2001
+From ab5e0997134733254de6a43efeccfc1a05f18ac5 Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Tue, 21 Jan 2020 04:04:44 -0500
-Subject: [PATCH 37/44] Change iSulad-kit to iSulad-img
+Subject: [PATCH 37/46] Change iSulad-kit to iSulad-img
 
 Signed-off-by: WangFengTu <wangfengtu@huawei.com>
 ---

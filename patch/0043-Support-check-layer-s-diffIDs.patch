@@ -1,7 +1,7 @@
-From 474acdd0fd80f75ff62b6164e8941196206ed6a3 Mon Sep 17 00:00:00 2001
+From 50e282d70baba1275d71a08425ddbc074ca2fa57 Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Mon, 13 Jan 2020 08:50:55 -0500
-Subject: [PATCH 43/44] Support check layer's diffIDs
+Subject: [PATCH 43/46] Support check layer's diffIDs
 
 Signed-off-by: WangFengTu <wangfengtu@huawei.com>
 ---

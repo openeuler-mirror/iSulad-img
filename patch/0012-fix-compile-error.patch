@@ -1,7 +1,7 @@
-From b1e79c0c65fda2743940db3491da64899d8802ac Mon Sep 17 00:00:00 2001
+From 6ba90504cd69e51a786d639254cdb773d774570f Mon Sep 17 00:00:00 2001
 From: LiuHao <liuhao27@huawei.com>
 Date: Thu, 2 May 2019 11:56:34 +0800
-Subject: [PATCH 12/44] fix compile error
+Subject: [PATCH 12/46] fix compile error
 
 fix compile error
 

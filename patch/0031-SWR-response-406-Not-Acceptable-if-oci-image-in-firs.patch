@@ -1,7 +1,7 @@
-From bf98c93d9d00526f029d484b305b1c6ca5dad193 Mon Sep 17 00:00:00 2001
+From 57393a0ee0b7fe675560660663574d520957ef6d Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Fri, 29 Nov 2019 03:21:02 -0500
-Subject: [PATCH 31/44] SWR response "406: Not Acceptable" if oci image in
+Subject: [PATCH 31/46] SWR response "406: Not Acceptable" if oci image in
  first
 
 Signed-off-by: WangFengTu <wangfengtu@huawei.com>

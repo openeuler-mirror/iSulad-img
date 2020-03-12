@@ -1,0 +1,53 @@
+From e9d1a46389937bc9f088dbe912386f92901c3999 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Thu, 12 Mar 2020 18:17:49 +0800
+Subject: [PATCH 46/46] Sync write link and lower files to avoid broken caused
+ by poweroff
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../containers/storage/drivers/overlay/overlay.go          | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+index d1f754c..a6e3db6 100644
+--- a/vendor/github.com/containers/storage/drivers/overlay/overlay.go
++++ b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+@@ -24,6 +24,7 @@ import (
+ 	"github.com/containers/storage/pkg/directory"
+ 	"github.com/containers/storage/pkg/fsutils"
+ 	"github.com/containers/storage/pkg/idtools"
++	"github.com/containers/storage/pkg/ioutils"
+ 	"github.com/containers/storage/pkg/locker"
+ 	"github.com/containers/storage/pkg/mount"
+ 	"github.com/containers/storage/pkg/ostree"
+@@ -534,7 +535,7 @@ func (d *Driver) create(id, parent string, opts *graphdriver.CreateOpts) (retErr
+ 	}
+ 
+ 	// Write link id to link file
+-	if err := ioutil.WriteFile(path.Join(dir, "link"), []byte(lid), 0644); err != nil {
++	if err := ioutils.AtomicWriteFile(path.Join(dir, "link"), []byte(lid), 0644); err != nil {
+ 		return err
+ 	}
+ 
+@@ -555,7 +556,7 @@ func (d *Driver) create(id, parent string, opts *graphdriver.CreateOpts) (retErr
+ 		return err
+ 	}
+ 	if lower != "" {
+-		if err := ioutil.WriteFile(path.Join(dir, lowerFile), []byte(lower), 0666); err != nil {
++		if err := ioutils.AtomicWriteFile(path.Join(dir, lowerFile), []byte(lower), 0666); err != nil {
+ 			return err
+ 		}
+ 	}
+@@ -1133,7 +1134,7 @@ func (d *Driver) TryRepairLowers(id, parent string) error {
+ 		return err
+ 	}
+ 	if lower != "" {
+-		if err := ioutil.WriteFile(path.Join(d.dir(id), lowerFile), []byte(lower), 0666); err != nil {
++		if err := ioutils.AtomicWriteFile(path.Join(d.dir(id), lowerFile), []byte(lower), 0666); err != nil {
+ 			return err
+ 		}
+ 	}
+-- 
+2.19.1
+
