@@ -1,7 +1,7 @@
-From e9d1a46389937bc9f088dbe912386f92901c3999 Mon Sep 17 00:00:00 2001
+From 327b8c7513cae78a0bfc64da061a2a105b2e7623 Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Thu, 12 Mar 2020 18:17:49 +0800
-Subject: [PATCH 46/46] Sync write link and lower files to avoid broken caused
+Subject: [PATCH 46/47] Sync write link and lower files to avoid broken caused
  by poweroff
 
 Signed-off-by: WangFengTu <wangfengtu@huawei.com>

@@ -1,7 +1,7 @@
-From a2fe9eca3561eff205c828bdbc6c504a4551b7cc Mon Sep 17 00:00:00 2001
+From 959f7970bd588a0e48c8a606cb84d556fe73d38b Mon Sep 17 00:00:00 2001
 From: WangFengTu <wangfengtu@huawei.com>
 Date: Thu, 12 Mar 2020 14:17:11 +0800
-Subject: [PATCH 45/46] When id is empty for overlay2/overlay, do not remove
+Subject: [PATCH 45/47] When id is empty for overlay2/overlay, do not remove
  the directories.
 
 Signed-off-by: fanjiyun <fan.jiyun@zte.com.cn>
