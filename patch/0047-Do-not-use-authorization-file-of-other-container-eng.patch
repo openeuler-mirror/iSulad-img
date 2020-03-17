@@ -1,0 +1,88 @@
+From 2705b8b5cb59b2b5572178a3a81d605875ab14d9 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Tue, 17 Mar 2020 16:07:55 +0800
+Subject: [PATCH 47/47] Do not use authorization file of other container engine
+
+If authorization file of other container engine's format changed,
+pull image will failed cause by parsing authorization file error.
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../image/pkg/docker/config/config.go         | 29 ++-----------------
+ 1 file changed, 2 insertions(+), 27 deletions(-)
+
+diff --git a/vendor/github.com/containers/image/pkg/docker/config/config.go b/vendor/github.com/containers/image/pkg/docker/config/config.go
+index 5f73556..56a5e39 100644
+--- a/vendor/github.com/containers/image/pkg/docker/config/config.go
++++ b/vendor/github.com/containers/image/pkg/docker/config/config.go
+@@ -14,7 +14,6 @@ import (
+ 	"github.com/containers/storage/pkg/filelocker"
+ 	helperclient "github.com/docker/docker-credential-helpers/client"
+ 	"github.com/docker/docker-credential-helpers/credentials"
+-	"github.com/docker/docker/pkg/homedir"
+ 	"github.com/pkg/errors"
+ 	"github.com/sirupsen/logrus"
+ )
+@@ -29,11 +28,6 @@ type dockerConfigFile struct {
+ }
+ 
+ var (
+-	defaultPerUIDPathFormat = filepath.FromSlash("/run/containers/%d/auth.json")
+-	xdgRuntimeDirPath       = filepath.FromSlash("containers/auth.json")
+-	dockerHomePath          = filepath.FromSlash(".docker/config.json")
+-	dockerLegacyHomePath    = ".dockercfg"
+-
+ 	// ErrNotLoggedIn is returned for users not logged into a registry
+ 	// that they are trying to logout of
+ 	ErrNotLoggedIn = errors.New("not logged in")
+@@ -64,7 +58,6 @@ func GetAuthentication(sys *types.SystemContext, registry string) (string, strin
+ 		return sys.DockerAuthConfig.Username, sys.DockerAuthConfig.Password, nil
+ 	}
+ 
+-	dockerLegacyPath := filepath.Join(homedir.Get(), dockerLegacyHomePath)
+ 	var paths []string
+ 	pathToAuth, err := getPathToAuth(sys)
+ 	if err == nil {
+@@ -75,11 +68,9 @@ func GetAuthentication(sys *types.SystemContext, registry string) (string, strin
+ 		// Logging the error as a warning instead and moving on to pulling the image
+ 		logrus.Warnf("%v: Trying to pull image in the event that it is a public image.", err)
+ 	}
+-	paths = append(paths, filepath.Join(homedir.Get(), dockerHomePath), dockerLegacyPath)
+ 
+ 	for _, path := range paths {
+-		legacyFormat := path == dockerLegacyPath
+-		username, password, err := findAuthentication(registry, path, legacyFormat)
++		username, password, err := findAuthentication(registry, path, false)
+ 		if err != nil {
+ 			return "", "", err
+ 		}
+@@ -142,25 +133,9 @@ func getPathToAuth(sys *types.SystemContext) (string, error) {
+ 		if sys.AuthFilePath != "" {
+ 			return sys.AuthFilePath, nil
+ 		}
+-		if sys.RootForImplicitAbsolutePaths != "" {
+-			return filepath.Join(sys.RootForImplicitAbsolutePaths, fmt.Sprintf(defaultPerUIDPathFormat, os.Getuid())), nil
+-		}
+ 	}
+ 
+-	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+-	if runtimeDir != "" {
+-		// This function does not in general need to separately check that the returned path exists; that’s racy, and callers will fail accessing the file anyway.
+-		// We are checking for os.IsNotExist here only to give the user better guidance what to do in this special case.
+-		_, err := os.Stat(runtimeDir)
+-		if os.IsNotExist(err) {
+-			// This means the user set the XDG_RUNTIME_DIR variable and either forgot to create the directory
+-			// or made a typo while setting the environment variable,
+-			// so return an error referring to $XDG_RUNTIME_DIR instead of xdgRuntimeDirPath inside.
+-			return "", errors.Wrapf(err, "%q directory set by $XDG_RUNTIME_DIR does not exist. Either create the directory or unset $XDG_RUNTIME_DIR.", runtimeDir)
+-		} // else ignore err and let the caller fail accessing xdgRuntimeDirPath.
+-		return filepath.Join(runtimeDir, xdgRuntimeDirPath), nil
+-	}
+-	return fmt.Sprintf(defaultPerUIDPathFormat, os.Getuid()), nil
++	return "", errors.New("Missing authorization file path")
+ }
+ 
+ func decryptAuths(dir string, auths *dockerConfigFile) error {
+-- 
+2.19.1
+
