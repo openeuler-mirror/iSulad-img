@@ -14,4 +14,4 @@
 package main
 
 // Version is the version of the build.
-const Version = "1.2.5"
+const Version = "2.0.0"
