@@ -261,12 +261,12 @@ func (s *grpcImageService) ListImages(ctx context.Context, req *pb.ListImagesReq
 
 	resp := &pb.ListImagesResponse{}
 	for _, img := range images.Images {
-		respImg, err := transImageToPBImage(img)
-		if err != nil {
+		respImg, err2 := transImageToPBImage(img)
+		if err2 != nil {
 			return &pb.ListImagesResponse{
-				Errmsg: err.Error(),
+				Errmsg: err2.Error(),
 				Cc:     1,
-			}, err
+			}, err2
 		}
 
 		resp.Images = append(resp.Images, respImg)
@@ -629,6 +629,30 @@ func (s *grpcImageService) GraphdriverStatus(ctx context.Context, req *pb.Graphd
 	if !gotBackingFs {
 		err := errors.New("Internal error, failed to get backing filesystem")
 		return &pb.GraphdriverStatusResponse{
+			Errmsg: err.Error(),
+			Cc:     1,
+		}, err
+	}
+
+	return resp, nil
+}
+
+// get metadata of graphdriver
+func (s *grpcImageService) GraphdriverMetadata(ctx context.Context, req *pb.GraphdriverMetadataRequest) (*pb.GraphdriverMetadataResponse, error) {
+	var err error
+
+	if req == nil || req.NameId == "" {
+		err = errors.New("Lack infomation for driver metadata")
+		return &pb.GraphdriverMetadataResponse{
+			Errmsg: err.Error(),
+			Cc:     1,
+		}, err
+	}
+
+	resp := &pb.GraphdriverMetadataResponse{}
+	resp.Metadata, resp.Name, err = storageMetadata(s.gopts, req.NameId)
+	if err != nil {
+		return &pb.GraphdriverMetadataResponse{
 			Errmsg: err.Error(),
 			Cc:     1,
 		}, err
