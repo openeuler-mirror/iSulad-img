@@ -184,6 +184,16 @@ func transPBImageToImage(pbImage *pb.Image) (*Image, error) {
 		Created:     &created,
 		Loaded:      &loaded,
 	}
+	if pbImage.Healthcheck != nil {
+		respImg.Healthcheck = &HealthConfig{
+			Test:            pbImage.Healthcheck.Test,
+			Interval:        time.Duration(pbImage.Healthcheck.Interval),
+			Timeout:         time.Duration(pbImage.Healthcheck.Timeout),
+			StartPeriod:     time.Duration(pbImage.Healthcheck.StartPeriod),
+			Retries:         int(pbImage.Healthcheck.Retries),
+			ExitOnUnhealthy: pbImage.Healthcheck.ExitOnUnhealthy,
+		}
+	}
 
 	if pbImage.Spec != nil && pbImage.Spec.Image != "" {
 		err = json.Unmarshal([]byte(pbImage.Spec.Image), &respImg.ImageSpec)
@@ -227,6 +237,16 @@ func transImageToPBImage(img *Image) (*pb.Image, error) {
 		Username:    img.Username,
 		Created:     created,
 		Loaded:      loaded,
+	}
+	if img.Healthcheck != nil {
+		respImg.Healthcheck = &pb.HealthCheck{
+			Test:            img.Healthcheck.Test,
+			Interval:        int64(img.Healthcheck.Interval),
+			Timeout:         int64(img.Healthcheck.Timeout),
+			StartPeriod:     int64(img.Healthcheck.StartPeriod),
+			Retries:         int32(img.Healthcheck.Retries),
+			ExitOnUnhealthy: img.Healthcheck.ExitOnUnhealthy,
+		}
 	}
 
 	spec, err := json.Marshal(img.ImageSpec)
