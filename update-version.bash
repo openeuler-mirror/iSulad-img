@@ -23,7 +23,7 @@ old_version=$(cat ${specfile} | grep "%global" | grep "_version" | awk  {'print 
 first_old_version=$(cat ${specfile} | grep "%global" | grep "_version" | awk  {'print $3'} | awk -F "." {'print $1'})
 second_old_version=$(cat ${specfile} | grep "%global" | grep "_version" | awk  {'print $3'} | awk -F "." {'print $2'})
 third_old_version=$(cat ${specfile} | grep "%global" | grep "_version" | awk  {'print $3'} | awk -F "." {'print $3'})
-read -p "Which level version do you want to upgrade?[1/2/3/N](default:N)  select:" choice
+read -p "Which level version do you want to upgrade?[1/2/3/d/N](default:N)  select:" choice
 if [[ ! -n "${choice}" || ${choice} == "N" ]]; then
   echo "The version number has not been modified, it is still ${old_version}"
   exit 0
@@ -36,7 +36,7 @@ if [[ ${choice} -eq "1" ]]; then
 elif [[ ${choice} -eq "2" ]]; then
   second_old_version=$(($second_old_version+1))
   third_old_version="0"
-else
+elif [[ ${choice} -eq "3" ]]; then
   third_old_version=$(($third_old_version+1))
 fi
 
