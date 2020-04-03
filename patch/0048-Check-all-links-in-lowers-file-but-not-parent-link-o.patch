@@ -1,0 +1,114 @@
+From 549b185a998bbb1eab7d0c501b4208ca7640acc2 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Thu, 2 Apr 2020 17:05:43 +0800
+Subject: [PATCH] Check all links in lowers file but not parent link only
+
+And delete unchecked layers from top to bottom to avoid
+delete failure.
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../storage/drivers/overlay/overlay.go        | 26 +++++------
+ vendor/github.com/containers/storage/store.go | 43 +++++++++++++++++--
+ 2 files changed, 52 insertions(+), 17 deletions(-)
+
+diff --git a/vendor/github.com/containers/storage/drivers/overlay/overlay.go b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+index a6e3db6..3e9f650 100644
+--- a/vendor/github.com/containers/storage/drivers/overlay/overlay.go
++++ b/vendor/github.com/containers/storage/drivers/overlay/overlay.go
+@@ -1122,22 +1122,22 @@ func (d *Driver) TryRepairLowers(id, parent string) error {
+ 	}
+ 
+ 	lowers := strings.Split(string(lowersStr), ":")
+-	if len(lowers) != 0 {
+-		if _, err := os.Stat(path.Join(d.home, lowers[0])); err == nil {
+-			return nil
++	for _, l := range lowers {
++		if _, err := os.Stat(path.Join(d.home, l)); err != nil {
++			// Try repair lowers
++			lower, err := d.getLower(parent)
++			if err != nil {
++				return err
++			}
++			if lower != "" {
++				if err := ioutils.AtomicWriteFile(path.Join(d.dir(id), lowerFile), []byte(lower), 0666); err != nil {
++					return err
++				}
++			}
++			break
+ 		}
+ 	}
+ 
+-	// Try repair lowers
+-	lower, err := d.getLower(parent)
+-	if err != nil {
+-		return err
+-	}
+-	if lower != "" {
+-		if err := ioutils.AtomicWriteFile(path.Join(d.dir(id), lowerFile), []byte(lower), 0666); err != nil {
+-			return err
+-		}
+-	}
+ 	return nil
+ }
+ 
+diff --git a/vendor/github.com/containers/storage/store.go b/vendor/github.com/containers/storage/store.go
+index 236eccd..e1cfc82 100644
+--- a/vendor/github.com/containers/storage/store.go
++++ b/vendor/github.com/containers/storage/store.go
+@@ -2199,13 +2199,48 @@ func (s *store) DeleteUncheckedLayers() error {
+ 		return err
+ 	}
+ 
++	toBeDeleted := make(map[string]bool)
+ 	for _, l := range layers {
+-		if s.checkedLayers[l.ID] {
++		if _, exist := s.checkedLayers[l.ID]; exist {
+ 			continue
+ 		}
+-		logrus.Errorf("Delete unchecked layer %v due to no related image", l.ID)
+-		if err := s.DeleteLayer(l.ID); err != nil {
+-			logrus.Errorf("Failed to delete unchecked layer %v: %v", l.ID, err)
++		toBeDeleted[l.ID] = true
++	}
++
++	haveChildren := make(map[string]bool)
++	for _, l := range layers {
++		if _, exist := s.checkedLayers[l.ID]; exist {
++			continue
++		}
++
++		if _, exist := haveChildren[l.ID]; !exist {
++			haveChildren[l.ID] = false
++		}
++		if _, exist := toBeDeleted[l.Parent]; exist {
++			haveChildren[l.Parent] = true
++		}
++	}
++
++	// Delete layers from top to bottom to avoid delete failure
++	for id, have := range haveChildren {
++		if have {
++			continue
++		}
++		for {
++			if _, exist := toBeDeleted[id]; !exist {
++				break
++			}
++			delete(toBeDeleted, id)
++			l, err := s.Layer(id)
++			if err != nil {
++				logrus.Errorf("Failed to get layer %s for deletion", id)
++				break
++			}
++			logrus.Errorf("Delete unchecked layer %v due to no related image", id)
++			if err := s.DeleteLayer(id); err != nil {
++				logrus.Errorf("Failed to delete unchecked layer %v: %v", id, err)
++			}
++			id = l.Parent
+ 		}
+ 	}
+ 	return nil
+-- 
+2.19.1
+
