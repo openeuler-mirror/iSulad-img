@@ -1,0 +1,27 @@
+From 6c4128131fc86d110d1ae00af2344ad01e6877cc Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Tue, 7 Apr 2020 15:22:19 +0800
+Subject: [PATCH] Delete related names when delete layer
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ vendor/github.com/containers/storage/layers.go | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/vendor/github.com/containers/storage/layers.go b/vendor/github.com/containers/storage/layers.go
+index 31e5d69..fbea219 100644
+--- a/vendor/github.com/containers/storage/layers.go
++++ b/vendor/github.com/containers/storage/layers.go
+@@ -1166,6 +1166,9 @@ func (r *layerStore) Delete(id string) error {
+ 	}
+ 	os.Remove(r.tspath(id))
+ 	delete(r.byid, id)
++	for _, name := range layer.Names {
++		delete(r.byname, name)
++	}
+ 	r.idindex.Delete(id)
+ 	updateDigestMap(&r.bycompressedsum, layer.CompressedDigest, "", id)
+ 	updateDigestMap(&r.byuncompressedsum, layer.UncompressedDigest, "", id)
+-- 
+2.19.1
+
