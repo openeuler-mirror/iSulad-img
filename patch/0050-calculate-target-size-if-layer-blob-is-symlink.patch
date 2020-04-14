@@ -1,0 +1,131 @@
+From b86e9177925ee04973fab55db35952c2d4a3ebf3 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Mon, 13 Apr 2020 22:57:28 -0400
+Subject: [PATCH] calculate target size if layer blob is symlink
+
+If symlink's size is zero, it may cause the error
+"Error writing blob: blob size mismatch"
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../containers/image/docker/tarfile/src.go    | 82 +++++++++++++++----
+ 1 file changed, 67 insertions(+), 15 deletions(-)
+
+diff --git a/vendor/github.com/containers/image/docker/tarfile/src.go b/vendor/github.com/containers/image/docker/tarfile/src.go
+index 50c7c44..82e30a3 100644
+--- a/vendor/github.com/containers/image/docker/tarfile/src.go
++++ b/vendor/github.com/containers/image/docker/tarfile/src.go
+@@ -10,6 +10,7 @@ import (
+ 	"io/ioutil"
+ 	"os"
+ 	"path"
++	"path/filepath"
+ 
+ 	"github.com/containers/image/docker/reference"
+ 	"github.com/containers/image/internal/tmpdir"
+@@ -335,7 +336,31 @@ func (s *Source) prepareLayerData(tarManifest *ManifestItem, parsedConfig *manif
+ 		unknownLayerSizes[layerPath] = li
+ 	}
+ 
++	calcSize := func(t *tar.Reader, name string, size int64) (int64, error) {
++		// Since GetBlob will decompress layers that are compressed we need
++		// to do the decompression here as well, otherwise we will
++		// incorrectly report the size. Pretty critical, since tools like
++		// umoci always compress layer blobs. Obviously we only bother with
++		// the slower method of checking if it's compressed.
++		uncompressedStream, isCompressed, err := compression.AutoDecompress(t)
++		if err != nil {
++			return 0, errors.Wrapf(err, "Error auto-decompressing %s to determine its size", name)
++		}
++		defer uncompressedStream.Close()
++
++		uncompressedSize := size
++		if isCompressed {
++			uncompressedSize, err = io.Copy(ioutil.Discard, uncompressedStream)
++			if err != nil {
++				return 0, errors.Wrapf(err, "Error reading %s to find its size", name)
++			}
++		}
++
++		return uncompressedSize, nil
++	}
++
+ 	// Scan the tar file to collect layer sizes.
++	symlinkSrcs := make(map[string][]string)
+ 	file, err := os.Open(s.tarPath)
+ 	if err != nil {
+ 		return nil, err
+@@ -351,28 +376,55 @@ func (s *Source) prepareLayerData(tarManifest *ManifestItem, parsedConfig *manif
+ 			return nil, err
+ 		}
+ 		if li, ok := unknownLayerSizes[h.Name]; ok {
+-			// Since GetBlob will decompress layers that are compressed we need
+-			// to do the decompression here as well, otherwise we will
+-			// incorrectly report the size. Pretty critical, since tools like
+-			// umoci always compress layer blobs. Obviously we only bother with
+-			// the slower method of checking if it's compressed.
+-			uncompressedStream, isCompressed, err := compression.AutoDecompress(t)
+-			if err != nil {
+-				return nil, errors.Wrapf(err, "Error auto-decompressing %s to determine its size", h.Name)
++			// Symlink's size is zero, we need the target layer's size. We will
++			// calculate it later.
++			if h.Typeflag == tar.TypeSymlink {
++				linkname := filepath.Join(filepath.Dir(h.Name), h.Linkname)
++				symlinkSrcs[linkname] = append(symlinkSrcs[linkname], h.Name)
++				continue
+ 			}
+-			defer uncompressedStream.Close()
+ 
+-			uncompressedSize := h.Size
+-			if isCompressed {
+-				uncompressedSize, err = io.Copy(ioutil.Discard, uncompressedStream)
+-				if err != nil {
+-					return nil, errors.Wrapf(err, "Error reading %s to find its size", h.Name)
+-				}
++			uncompressedSize, err := calcSize(t, h.Name, h.Size)
++			if err != nil {
++				return nil, err
+ 			}
++
+ 			li.size = uncompressedSize
+ 			delete(unknownLayerSizes, h.Name)
+ 		}
+ 	}
++
++	// File symlink's size
++	tarfile, err := os.Open(s.tarPath)
++	if err != nil {
++		return nil, err
++	}
++	defer tarfile.Close()
++	t = tar.NewReader(tarfile)
++	for {
++		h, err := t.Next()
++		if err == io.EOF {
++			break
++		}
++		if err != nil {
++			return nil, err
++		}
++
++		if srcs, ok := symlinkSrcs[h.Name]; ok {
++			uncompressedSize, err := calcSize(t, h.Name, h.Size)
++			if err != nil {
++				return nil, err
++			}
++
++			for _, src := range srcs {
++				if layer, ok := unknownLayerSizes[src]; ok {
++					layer.size = uncompressedSize
++					delete(unknownLayerSizes, src)
++				}
++			}
++		}
++	}
++
+ 	if len(unknownLayerSizes) != 0 {
+ 		return nil, errors.Errorf("Some layer tarfiles are missing in the tarball") // This could do with a better error reporting, if this ever happened in practice.
+ 	}
+-- 
+2.19.1
+
