@@ -154,6 +154,8 @@ type ImageServer interface {
 	ParseImageNames(imageName string) ([]parsedImageNames, error)
 	// IsSecureIndex check if indexName is insecure
 	IsSecureIndex(indexName string) bool
+	// Tag image to other name
+	Tag(srcName, destName string) error
 }
 
 func (svc *imageService) InitImage(image parsedImageNames, options *copy.Options) (types.Image, error) {
@@ -327,6 +329,19 @@ func (svc *imageService) UnrefImage(systemContext *types.SystemContext, imageNam
 	}
 
 	return ref.DeleteImage(svc.ctx, systemContext)
+}
+
+func (svc *imageService) Tag(srcName, destName string) error {
+	ref, err := svc.parseImageName(srcName)
+	if err != nil {
+		return err
+	}
+	img, err := imstorage.Transport.GetStoreImage(svc.store, ref)
+	if err != nil {
+		return err
+	}
+
+	return svc.store.AddName(img.ID, destName)
 }
 
 func (svc *imageService) GetStore() storage.Store {
