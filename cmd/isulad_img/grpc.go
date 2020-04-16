@@ -752,3 +752,24 @@ func (s *grpcImageService) ListContainers(ctx context.Context, req *pb.ListConta
 
 	return &pb.ListContainersResponse{Containers: containers}, nil
 }
+
+func (s *grpcImageService) TagImage(ctx context.Context, req *pb.TagImageRequest) (*pb.TagImageResponse, error) {
+	if req == nil || req.SrcName == nil || req.SrcName.Image == "" ||
+		req.DestName == nil || req.DestName.Image == "" {
+		err := errors.New("Lack infomation for tag image")
+		return &pb.TagImageResponse{
+			Errmsg: err.Error(),
+			Cc:     1,
+		}, err
+	}
+
+	err := imageTag(s.gopts, req.SrcName.Image, req.DestName.Image)
+	if err != nil {
+		return &pb.TagImageResponse{
+			Errmsg: err.Error(),
+			Cc:     1,
+		}, err
+	}
+
+	return &pb.TagImageResponse{}, nil
+}
