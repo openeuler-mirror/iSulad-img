@@ -1,0 +1,31 @@
+From ed39db013b234639887c15fe4c8ccf843570958f Mon Sep 17 00:00:00 2001
+From: haozi007 <liuhao27@huawei.com>
+Date: Wed, 22 Apr 2020 10:55:12 +0800
+Subject: [PATCH] clean container if save json failed
+
+Signed-off-by: haozi007 <liuhao27@huawei.com>
+---
+ vendor/github.com/containers/storage/store.go | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/vendor/github.com/containers/storage/store.go b/vendor/github.com/containers/storage/store.go
+index e1cfc82..0afe3f5 100644
+--- a/vendor/github.com/containers/storage/store.go
++++ b/vendor/github.com/containers/storage/store.go
+@@ -1435,10 +1435,13 @@ func (s *store) CreateContainer(id string, names []string, image, layer, metadat
+ 	}
+ 	container, err := rcstore.Create(id, names, imageID, layer, metadata, options)
+ 	if err != nil || container == nil {
++		rcstore.Delete(id)
+ 		rlstore.Delete(layer)
++		return nil, err
+ 	}
+ 	container.MountPoint = tmpLayer.MountPoint
+ 	if err = s.SaveContainerRunJson(container); err != nil {
++		rcstore.Delete(id)
+ 		rlstore.Delete(layer)
+ 		return nil, err
+ 	}
+-- 
+2.25.2
+
