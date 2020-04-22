@@ -1,0 +1,29 @@
+From e0b3486880ca376e72c0f721ba1c5510c3e360cd Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Wed, 22 Apr 2020 08:21:59 -0400
+Subject: [PATCH] support pull image of schema1
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ vendor/github.com/containers/image/copy/copy.go | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/vendor/github.com/containers/image/copy/copy.go b/vendor/github.com/containers/image/copy/copy.go
+index 4d75b65..da119d5 100644
+--- a/vendor/github.com/containers/image/copy/copy.go
++++ b/vendor/github.com/containers/image/copy/copy.go
+@@ -381,6 +381,11 @@ func (ic *imageCopier) checkLayersDiffIDs(ctx context.Context) error {
+ 		return errors.Wrap(err, "Error getting config blob when checking layer's diffIDs")
+ 	}
+ 
++	// schema1 doesn't have config blob
++	if string(configBytes) == "" {
++		return nil
++	}
++
+ 	var config manifest.Schema2Image
+ 	if err := json.Unmarshal(configBytes, &config); err != nil {
+ 		return errors.Wrapf(err, "Error decoding config %s", string(configBytes))
+-- 
+2.19.1
+
