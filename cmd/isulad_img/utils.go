@@ -236,8 +236,8 @@ func readAuthFromStdin() (string, string, error) {
 		return "", "", fmt.Errorf("error reading authentication: %v", err)
 	}
 
-	if err := json.Unmarshal(line, &authData); err != nil {
-		return "", "", fmt.Errorf("error unmarshal authentication: %v", err)
+	if err2 := json.Unmarshal(line, &authData); err2 != nil {
+		return "", "", fmt.Errorf("error unmarshal authentication: %v", err2)
 	}
 
 	if authData.Username != "" {
@@ -293,6 +293,12 @@ func getHealthcheck(store cstorage.Store, containerImageName string) (*HealthCon
 	if err != nil {
 		return nil, err
 	}
+
+	// schema1 doesn't have config blob
+	if cb == nil {
+		return nil, nil
+	}
+
 	config := &ConfigFromJSON{}
 	if err := json.Unmarshal(cb, config); err != nil {
 		return nil, err
