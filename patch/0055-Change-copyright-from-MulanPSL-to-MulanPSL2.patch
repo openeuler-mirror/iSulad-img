@@ -1,0 +1,40 @@
+From d405a6a04898d5cfd1c766567353cbaa69235b5b Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Mon, 27 Apr 2020 00:51:48 -0400
+Subject: [PATCH] Change copyright from MulanPSL to MulanPSL2
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ vendor/github.com/containers/image/pkg/docker/aes/aes.go        | 2 +-
+ .../github.com/containers/storage/drivers/devmapper/sem_stat.go | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/vendor/github.com/containers/image/pkg/docker/aes/aes.go b/vendor/github.com/containers/image/pkg/docker/aes/aes.go
+index eca3d44..480af0e 100644
+--- a/vendor/github.com/containers/image/pkg/docker/aes/aes.go
++++ b/vendor/github.com/containers/image/pkg/docker/aes/aes.go
+@@ -2,7 +2,7 @@
+ // iSulad-img licensed under the Mulan PSL v2.
+ // You can use this software according to the terms and conditions of the Mulan PSL v2.
+ // You may obtain a copy of Mulan PSL v2 at:
+-//     http://license.coscl.org.cn/MulanPSL
++//     http://license.coscl.org.cn/MulanPSL2
+ // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
+ // IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR
+ // PURPOSE.
+diff --git a/vendor/github.com/containers/storage/drivers/devmapper/sem_stat.go b/vendor/github.com/containers/storage/drivers/devmapper/sem_stat.go
+index a703e86..4b39f58 100644
+--- a/vendor/github.com/containers/storage/drivers/devmapper/sem_stat.go
++++ b/vendor/github.com/containers/storage/drivers/devmapper/sem_stat.go
+@@ -2,7 +2,7 @@
+ // iSulad-kit licensed under the Mulan PSL v2.
+ // You can use this software according to the terms and conditions of the Mulan PSL v2.
+ // You may obtain a copy of Mulan PSL v2 at:
+-//     http://license.coscl.org.cn/MulanPSL
++//     http://license.coscl.org.cn/MulanPSL2
+ // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
+ // IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR
+ // PURPOSE.
+-- 
+2.19.1
+
