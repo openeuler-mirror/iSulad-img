@@ -7,7 +7,7 @@ Summary:    a tool for downloading iSulad images
 
 
 Group:      Applications/System
-License:    Mulan PSL v1
+License:    Mulan PSL v2
 URL:        https://gitee.com/src-openeuler/iSulad-img
 Source0:    iSulad-img-2.0.tar.gz
 
