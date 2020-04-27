@@ -1,0 +1,56 @@
+From bf9df456cf28c2921a67f675841ec0ed86c73d28 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Sun, 26 Apr 2020 23:37:53 -0400
+Subject: [PATCH] Change copyright from Mulan PSL v1 to Mulan PSL v2
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ vendor/github.com/containers/image/pkg/docker/aes/aes.go  | 8 ++++----
+ .../containers/storage/drivers/devmapper/sem_stat.go      | 8 ++++----
+ 2 files changed, 8 insertions(+), 8 deletions(-)
+
+diff --git a/vendor/github.com/containers/image/pkg/docker/aes/aes.go b/vendor/github.com/containers/image/pkg/docker/aes/aes.go
+index e9c62b7..eca3d44 100644
+--- a/vendor/github.com/containers/image/pkg/docker/aes/aes.go
++++ b/vendor/github.com/containers/image/pkg/docker/aes/aes.go
+@@ -1,12 +1,12 @@
+ // Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
+-// iSulad-img licensed under the Mulan PSL v1.
+-// You can use this software according to the terms and conditions of the Mulan PSL v1.
+-// You may obtain a copy of Mulan PSL v1 at:
++// iSulad-img licensed under the Mulan PSL v2.
++// You can use this software according to the terms and conditions of the Mulan PSL v2.
++// You may obtain a copy of Mulan PSL v2 at:
+ //     http://license.coscl.org.cn/MulanPSL
+ // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
+ // IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR
+ // PURPOSE.
+-// See the Mulan PSL v1 for more details.
++// See the Mulan PSL v2 for more details.
+ // Description: AES Encrypt and Decrypt
+ // Author: wangfengtu
+ // Create: 2019-07-16
+diff --git a/vendor/github.com/containers/storage/drivers/devmapper/sem_stat.go b/vendor/github.com/containers/storage/drivers/devmapper/sem_stat.go
+index 2aa90c1..a703e86 100644
+--- a/vendor/github.com/containers/storage/drivers/devmapper/sem_stat.go
++++ b/vendor/github.com/containers/storage/drivers/devmapper/sem_stat.go
+@@ -1,12 +1,12 @@
+ // Copyright (c) Huawei Technologies Co., Ltd. 2019. All rights reserved.
+-// iSulad-kit licensed under the Mulan PSL v1.
+-// You can use this software according to the terms and conditions of the Mulan PSL v1.
+-// You may obtain a copy of Mulan PSL v1 at:
++// iSulad-kit licensed under the Mulan PSL v2.
++// You can use this software according to the terms and conditions of the Mulan PSL v2.
++// You may obtain a copy of Mulan PSL v2 at:
+ //     http://license.coscl.org.cn/MulanPSL
+ // THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
+ // IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR
+ // PURPOSE.
+-// See the Mulan PSL v1 for more details.
++// See the Mulan PSL v2 for more details.
+ // Description: iSulad image kit
+ // Author: liruilin
+ // Create: 2019-01-19
+-- 
+2.19.1
+
