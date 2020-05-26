@@ -55,6 +55,8 @@ service ImageService {
     rpc ImageFsInfo(ImageFsInfoRequest) returns (ImageFsInfoResponse) {}
     // Load image from file
     rpc LoadImage(LoadImageRequest) returns (LoadImageResponose) {}
+    // Import rootfs to be image
+    rpc Import(ImportRequest) returns (ImportResponose) {}
 
     // isulad image services
     // get all Container rootfs
@@ -138,6 +140,17 @@ message LoadImageRequest {
 
 message LoadImageResponose {
     string outmsg = 1;
+    string errmsg = 2;
+    uint32 cc = 3;
+}
+
+message ImportRequest {
+    string file = 1;
+    string tag = 2;
+}
+
+message ImportResponose {
+    string id = 1;
     string errmsg = 2;
     uint32 cc = 3;
 }
