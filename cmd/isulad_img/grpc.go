@@ -425,6 +425,20 @@ func (s *grpcImageService) LoadImage(ctx context.Context, req *pb.LoadImageReque
 	return &pb.LoadImageResponose{Outmsg: outmsg}, err
 }
 
+// Import rootfs to be image
+func (s *grpcImageService) Import(ctx context.Context, req *pb.ImportRequest) (*pb.ImportResponose, error) {
+	id, err := importImage(s.gopts, req.File, req.Tag)
+	if err != nil {
+		return &pb.ImportResponose{
+			Id:     id,
+			Errmsg: err.Error(),
+			Cc:     1,
+		}, err
+	}
+
+	return &pb.ImportResponose{Id: id}, err
+}
+
 func copyImageFsUsage(fsUsage []*FilesystemUsage) (pbFsUsage []*pb.FilesystemUsage) {
 	for _, usage := range fsUsage {
 		element := &pb.FilesystemUsage{
