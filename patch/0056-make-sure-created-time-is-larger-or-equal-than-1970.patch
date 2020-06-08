@@ -1,0 +1,55 @@
+From cc357cbce3222091e7a952f0320f8cdf2363cb37 Mon Sep 17 00:00:00 2001
+From: WangFengTu <wangfengtu@huawei.com>
+Date: Mon, 8 Jun 2020 15:02:55 +0800
+Subject: [PATCH] make sure created time is larger or equal than 1970
+
+Signed-off-by: WangFengTu <wangfengtu@huawei.com>
+---
+ .../containers/image/docker/tarfile/src.go    | 24 +++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/vendor/github.com/containers/image/docker/tarfile/src.go b/vendor/github.com/containers/image/docker/tarfile/src.go
+index 82e30a3..c8b4f4e 100644
+--- a/vendor/github.com/containers/image/docker/tarfile/src.go
++++ b/vendor/github.com/containers/image/docker/tarfile/src.go
+@@ -238,6 +238,26 @@ func mainfestIndex(tarManifest []ManifestItem, repoTag string) (int, error) {
+ 	return 0, fmt.Errorf("RepoTag %v not found in tar archive\n", repoTag)
+ }
+ 
++func validConfig(config *manifest.Schema2Image) error {
++	// Linux time start from 1970-01-01 00:00:00 +0000 (UTC)
++	// If year is less then 1970, decode time string may fail.
++	const yearMin int = 1970
++
++	year := config.Created.Year()
++	if year < yearMin {
++		return fmt.Errorf("Invalid year %v of created, min is %v", year, yearMin)
++	}
++
++	for _, h := range config.History {
++		year = h.Created.Year()
++		if year < yearMin {
++			return fmt.Errorf("Invalid year %v of created in history, min is %v", year, yearMin)
++		}
++	}
++
++	return nil
++}
++
+ // ensureCachedDataIsPresent loads data necessary for any of the public accessors.
+ func (s *Source) ensureCachedDataIsPresent() error {
+ 	if s.tarManifest != nil {
+@@ -269,6 +289,10 @@ func (s *Source) ensureCachedDataIsPresent() error {
+ 		return errors.Wrapf(err, "Error decoding tar config %s", tarManifest[mIndex].Config)
+ 	}
+ 
++	if err := validConfig(&parsedConfig); err != nil {
++		return errors.Wrapf(err, "Error validating tar config %s", tarManifest[mIndex].Config)
++	}
++
+ 	knownLayers, err := s.prepareLayerData(&tarManifest[mIndex], &parsedConfig)
+ 	if err != nil {
+ 		return err
+-- 
+2.20.1
+
