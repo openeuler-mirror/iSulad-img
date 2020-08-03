@@ -1,5 +1,5 @@
 %global _version 2.0.0
-%global _release 20200629.162148.git8767d1a1
+%global _release 20200803.130531.git7619e1a0
 Name:       iSulad-img
 Version:    %{_version}
 Release:    %{_release}
@@ -18,7 +18,6 @@ BuildRequires:  device-mapper-devel
 %description
 A tool for downloading iSulad images, written in go language
 
-%global debug_package %{nil}
 
 %prep
 %setup -q -b 0 -c -n iSulad-img-%{version}
@@ -52,3 +51,8 @@ rm -rf %{buildroot}
 %{_sysconfdir}/*
 
 %changelog
+* Mon Aug 03 2020 openEuler Buildteam <buildteam@openeuler.org> - 2.0.0-20200803.130531.git7619e1a0
+- Type:enhancement
+- ID:NA
+- SUG:NA
+- DESC: add debug packages
