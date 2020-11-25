@@ -47,7 +47,7 @@ isulad_img: link
 	mkdir -p $(CURDIR)/src/isula-image/
 	cp -rf isula $(CURDIR)/src/isula-image/
 	mkdir -p ${GOTMPDIR}
-	$(GPGME_ENV) go build ${GO_DYN_FLAGS} -ldflags "-extldflags -zrelro -extldflags -znow -tmpdir ${GOTMPDIR} -X main.gitCommit=${GIT_COMMIT}" -gcflags "$(GOGCFLAGS)" -tags "$(BUILDTAGS)" -o isulad-img ./cmd/isulad_img
+	$(GPGME_ENV) go build ${GO_DYN_FLAGS} -ldflags "-extldflags -zrelro -extldflags -znow -s -extldflags -ftrapv -tmpdir ${GOTMPDIR} -X main.gitCommit=${GIT_COMMIT}" -gcflags "$(GOGCFLAGS)" -tags "$(BUILDTAGS)" -o isulad-img ./cmd/isulad_img
 	rm -rf ${GOTMPDIR}
 	rm -rf $(CURDIR)/src/isula-image/isula
 
