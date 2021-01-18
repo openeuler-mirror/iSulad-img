@@ -3,6 +3,10 @@
 This is a command line utility used by iSulad to performs various operations on container images.
 iSulad-img is used to pull image from image repositories and prepare the read\write layers for containers.
 
+## Stop maintenance
+
+We have merged the functions of iSulad-img into the iSulad, so stopped maintenance of this repository.
+
 ## How to Contribute
 
 We always welcome new contributors. And we are happy to provide guidance for the new contributors.
