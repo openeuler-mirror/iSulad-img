@@ -820,6 +820,30 @@ Copyright The client-go Authors
 
 Please see above.
 
+**Software**:
+
+google.golang.org/grpc v1.12.0
+
+**Copyright notice: **
+
+Copyright The grpc Authors
+
+**License: **Apache License Version 2.0
+
+Please see above.
+
+**Software**:
+
+google.golang.org/genproto 694d95ba50e67b2e363f3483057db5d4910c18f9
+
+**Copyright notice: **
+
+Copyright The genproto Authors
+
+**License: **Apache License Version 2.0
+
+Please see above.
+
 **Written Offer**
 
 This product contains software whose rights holders license it on the terms of the GNU General Public License, version 2 (GPLv2) and/or other open source software licenses. We will provide you and any third party with the source code of the software licensed under an open source software license if you send us a written request by mail or email to the following addresses:foss@huawei.com detailing the name of the product and the firmware version for which you need the source code and indicating how we can contact you.
